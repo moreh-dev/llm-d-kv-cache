@@ -314,7 +314,7 @@ func setupUnifiedHTTPEndpoints(
 			return
 		}
 
-		pods, err := kvCacheIndexer.GetPodScores(ctx, nil, req.Prompt, req.Model, nil)
+		pods, err := kvCacheIndexer.GetPodScores(ctx, nil, req.Prompt, nil, req.Model, nil)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("error: %v", err), http.StatusInternalServerError)
 			return
@@ -340,7 +340,7 @@ func setupUnifiedHTTPEndpoints(
 			return
 		}
 
-		pods, err := kvCacheIndexer.GetPodScores(ctx, req.RenderChatRequest, "", req.Model, nil)
+		pods, err := kvCacheIndexer.GetPodScores(ctx, req.RenderChatRequest, "", nil, req.Model, nil)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to get score request: %v", err), http.StatusInternalServerError)
 			return

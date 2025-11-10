@@ -396,6 +396,13 @@ func convertProtoFeatures(pf *tokenizerpb.MultiModalFeatures) *MultiModalFeature
 	return features
 }
 
+// RenderChatTemplate renders a chat template from raw JSON messages.
+// The UDS tokenizer does not support rendering chat templates to raw prompt strings;
+// use RenderChat instead which returns token IDs directly.
+func (u *UdsTokenizer) RenderChatTemplate(_ string, _ []byte) (string, error) {
+	return "", fmt.Errorf("RenderChatTemplate not supported by UDS tokenizer; use RenderChat instead")
+}
+
 func (u *UdsTokenizer) Type() string {
 	return "external-uds"
 }

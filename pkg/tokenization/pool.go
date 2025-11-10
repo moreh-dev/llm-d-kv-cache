@@ -39,6 +39,7 @@ type tokenizationResponse struct {
 // Task represents a unit of work for tokenizing a prompt.
 type Task struct {
 	RenderReq *types.RenderChatRequest
+	Messages  []byte
 	Prompt    string
 	ModelName string
 	ResultCh  chan<- tokenizationResponse // nil => fire-and-forget
@@ -48,7 +49,7 @@ type Task struct {
 type Pool struct {
 	modelName string // base model name for tokenization
 	workers   int
-	queue     workqueue.TypedRateLimitingInterface[Task]
+	queue     workqueue.TypedRateLimitingInterface[*Task]
 	wg        sync.WaitGroup
 
 	// Tokenizer is configured for the specific model this pool handles.
@@ -61,19 +62,20 @@ type Pool struct {
 // EnqueueTokenization enqueues a new tokenization task.
 // This method only enqueues the task and does not start processing it.
 func (pool *Pool) EnqueueTokenization(prompt string) {
-	task := Task{
+	task := &Task{
 		Prompt: prompt,
 	}
 	pool.queue.Add(task)
 }
 
 // Tokenize queues a task and blocks until the final result is available.
-func (pool *Pool) Tokenize(renderReq *types.RenderChatRequest, prompt string) ([]uint32, *MultiModalFeatures) {
+func (pool *Pool) Tokenize(renderReq *types.RenderChatRequest, prompt string, messages []byte) ([]uint32, *MultiModalFeatures) {
 	resultCh := make(chan tokenizationResponse, 1)
-	pool.queue.Add(Task{
+	pool.queue.Add(&Task{
 		RenderReq: renderReq,
 		Prompt:    prompt,
 		ResultCh:  resultCh,
+		Messages:  messages,
 	})
 
 	res := <-resultCh
@@ -129,7 +131,17 @@ func (pool *Pool) workerLoop(_ int) {
 
 // processTask tokenizes the prompt and returns the tokens via ResultCh.
 // It sends exactly one response (success or error) if ResultCh is provided.
-func (pool *Pool) processTask(task Task) error {
+func (pool *Pool) processTask(task *Task) error {
+	// If raw messages are provided, render chat template to produce a prompt string.
+	if task.Messages != nil {
+		renderedPrompt, err := pool.tokenizer.RenderChatTemplate(pool.modelName, task.Messages)
+		if err != nil {
+			log.Log.Error(err, "failed to render chat template", "messages", task.Messages)
+			return err
+		}
+		task.Prompt = renderedPrompt
+	}
+
 	var tokens []uint32
 	var features *MultiModalFeatures
 	var err error

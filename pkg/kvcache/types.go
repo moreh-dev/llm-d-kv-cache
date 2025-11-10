@@ -25,7 +25,7 @@ import (
 
 // TokenizersPool abstracts the tokenization pool for testability/mocking.
 type TokenizersPool interface {
-	Tokenize(renderReq *types.RenderChatRequest, prompt string) ([]uint32, *tokenization.MultiModalFeatures)
+	Tokenize(renderReq *types.RenderChatRequest, prompt string, messages []byte) ([]uint32, *tokenization.MultiModalFeatures)
 	Run(ctx context.Context)
 	SetTokenizer(tokenizer tokenization.Tokenizer, modelName string)
 }

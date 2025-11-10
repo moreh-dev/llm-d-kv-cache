@@ -367,6 +367,11 @@ func (t *CachedTokenizer) Render(prompt string) ([]uint32, []types.Offset, error
 	return tokens, offsets, nil
 }
 
+// RenderChatTemplate is not supported by the cached local tokenizer.
+func (t *CachedTokenizer) RenderChatTemplate(_ string, _ []byte) (string, error) {
+	return "", fmt.Errorf("RenderChatTemplate not supported by cached local tokenizer")
+}
+
 func (t *CachedTokenizer) Type() string {
 	return "cached"
 }
@@ -448,6 +453,20 @@ func (c *CompositeTokenizer) Render(prompt string,
 		return tokens, offsets, nil
 	}
 	return nil, nil, rErr
+}
+
+// RenderChatTemplate renders a chat template from raw JSON messages using the first available tokenizer.
+func (c *CompositeTokenizer) RenderChatTemplate(model string, messages []byte) (string, error) {
+	var rErr error
+	for _, tokenizer := range c.Tokenizers {
+		result, err := tokenizer.RenderChatTemplate(model, messages)
+		if err != nil {
+			rErr = multierr.Append(rErr, err)
+			continue
+		}
+		return result, nil
+	}
+	return "", rErr
 }
 
 func (c *CompositeTokenizer) Type() string {

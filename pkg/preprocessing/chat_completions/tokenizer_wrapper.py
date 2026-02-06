@@ -22,17 +22,89 @@ import logging
 import os
 import sys
 
-from vllm.tokenizers import get_tokenizer
+from vllm.entrypoints.openai.completion.protocol import CompletionRequest
+from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
+from vllm.entrypoints.openai.engine.protocol import ErrorResponse
+from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.entrypoints.openai.cli_args import make_arg_parser
+from vllm.utils.argparse_utils import FlexibleArgumentParser
+from vllm.plugins.io_processors import get_io_processor
+from vllm.entrypoints.openai.api_server import (
+    build_app,
+    init_app_state,
+)
+import asyncio
+
+from vllm.v1.engine.input_processor import InputProcessor
 
 # Basic logging setup
 logger = logging.getLogger(__name__)
 
-_tokenizer_cache = {}
+
+def _create_parser():
+    """Create a new argument parser instance. Thread-safe as each call creates a new parser."""
+    parser = FlexibleArgumentParser(
+        description="vLLM OpenAI-Compatible RESTful API server."
+    )
+    return make_arg_parser(parser)
+
+
+class EngineClientMock:
+    """
+    Lightweight mock of vLLM's AsyncLLMEngineClient for tokenization-only operations.
+
+    This class provides the minimal interface required by vLLM's OpenAI-compatible
+    serving layer (openai_serving_chat, openai_serving_completion) to perform
+    tokenization and chat template rendering without running a full inference engine.
+
+    Why a mock instead of the real engine client:
+    - The real AsyncLLMEngineClient requires GPU resources and model loading
+    - We only need tokenization/chat template functionality, not inference
+    - This allows CPU-only operation for the preprocessing pipeline
+
+    Replaces: vllm.entrypoints.openai.engine.async_llm_engine.AsyncLLMEngineClient
+
+    Limitations:
+    - Only supports 'generate' task (no embeddings, classifications, etc.)
+    - Does not perform actual inference - only tokenization and prompt rendering
+    - The 'errored' flag is always False as there's no engine to fail
+
+    Used by: get_or_create_tokenizer_key() to initialize vLLM's serving components
+    """
+
+    def __init__(self, vllm_config):
+        self.vllm_config = vllm_config
+        self.input_processor = InputProcessor(self.vllm_config)
+        self.io_processor = get_io_processor(
+            self.vllm_config,
+            self.vllm_config.model_config.io_processor_plugin,
+        )
+        self.model_config = vllm_config.model_config
+        self.errored = False
+        self.renderer = self.input_processor.renderer
+
+    async def get_supported_tasks(self):
+        return ("generate",)
+
+    async def get_tokenizer(self):
+        return self.input_processor.get_tokenizer()
+
+
+_app_cache = {}
+_loop = None
+
+
+def _run_async(coro):
+    """Run async coroutine using a persistent event loop."""
+    global _loop
+    if _loop is None or _loop.is_closed():
+        _loop = asyncio.new_event_loop()
+    return _loop.run_until_complete(coro)
 
 
 def clear_caches():
     """Clear the tokenizer cache for testing purposes."""
-    _tokenizer_cache.clear()
+    _app_cache.clear()
     return "Tokenizer caches cleared"
 
 
@@ -45,7 +117,16 @@ def get_or_create_tokenizer_key(request_json):
         request_json (str): JSON string containing the request parameters:
             - is_local (bool, optional): Whether the model is local.
             - model (str): The model ID or path (HF model ID, local directory path, or path to tokenizer file).
+            - tokenizer (str, optional): Tokenizer path (defaults to model path).
+            - tokenizer_mode (str, optional): Tokenizer mode (default: auto).
+                - "auto": use mistral_common for Mistral models if available, otherwise "hf".
+                - "hf": use the fast tokenizer if available.
+                - "slow": always use the slow tokenizer.
+                - "mistral": always use the tokenizer from mistral_common.
+                - "deepseek_v32": always use the tokenizer from deepseek_v32.
+                - Other custom values can be supported via plugins.
             - revision (str, optional): Model revision.
+            - tokenizer_revision (str, optional): Tokenizer revision.
             - token (str, optional): Hugging Face token for private models.
             - download_dir (str, optional): Directory to download the model.
     Returns:
@@ -65,26 +146,46 @@ def get_or_create_tokenizer_key(request_json):
         is_local = request.pop("is_local", False)
         token = request.pop("token", "")
         download_dir = request.pop("download_dir", None)
+        tokenizer = request.pop("tokenizer", None)
+        tokenizer_mode = request.pop("tokenizer_mode", "auto")
+        tokenizer_revision = request.pop("tokenizer_revision", None)
 
         if is_local and os.path.isfile(model_name):
             # If it's a file path (tokenizer.json), get the directory
             model_name = os.path.dirname(model_name)
 
         key = f"{model_name}:{revision or 'main'}:{is_local}"
-        tokenizer = _tokenizer_cache.get(key)
-        if tokenizer is not None:
+        app = _app_cache.get(key)
+        if app is not None:
             return key
-        os.environ["HF_TOKEN"] = token
-        tokenizer = get_tokenizer(
-            model_name,
-            trust_remote_code=True,
-            revision=revision,
-            download_dir=download_dir,
-        )
-        _tokenizer_cache[key] = tokenizer
+
+        # Create a new parser instance for thread-safety, and pass empty list
+        # to avoid parsing sys.argv (which may contain unrelated arguments)
+        args = _create_parser().parse_args([])
+        args.model = model_name
+        args.hf_token = token
+        args.download_dir = download_dir
+        args.tokenizer = tokenizer
+        args.tokenizer_mode = tokenizer_mode
+        args.revision = revision
+        args.tokenizer_revision = tokenizer_revision
+        args.trust_request_chat_template = True
+        engine_args = AsyncEngineArgs.from_cli_args(args)
+        vllm_config = engine_args.create_engine_config()
+
+        engine_client = EngineClientMock(vllm_config)
+        app = build_app(args)
+        # Note: init_app_state triggers a warmup that may log "Chat template warmup failed"
+        # if the model doesn't have a default chat template (e.g., facebook/opt-125m).
+        # This error can be safely ignored - actual render_chat calls will work correctly
+        # because they pass chat_template in the request.
+        _run_async(init_app_state(engine_client, app.state, args))
+        _app_cache[key] = app
         return key
     except Exception as e:
-        raise RuntimeError(f"Error initializing tokenizer: {e}") from e
+        raise RuntimeError(
+            f"Error initializing tokenizer ({type(e).__name__}): {e}"
+        ) from e
 
 
 def render_chat(request_json):
@@ -107,28 +208,53 @@ def render_chat(request_json):
     Returns:
         JSON string containing:
             - input_ids (list of int): The list of token IDs.
-            - offset_mapping (list of [int, int]): The list of offset mappings for each token.
+            - offset_mapping (list): Always empty. Offset mappings are not supported
+              by vLLM's render_chat_request API.
     """
 
     try:
         # Parse the JSON request
         request = json.loads(request_json)
         key = request.pop("key")
-        tokenizer = _tokenizer_cache.get(key)
-        if tokenizer is None:
-            raise RuntimeError(f"Tokenizer with key {key} not found in cache")
+        app = _app_cache.get(key)
+        if app is None:
+            raise RuntimeError(f"App with key {key} not found in cache")
 
         # Get template_vars and spread them as individual arguments
         template_vars = request.pop("chat_template_kwargs", {})
         request.update(template_vars)
 
-        request["tokenize"] = True
-        request["return_dict"] = True
-        request.setdefault("tokenizer_kwargs", {})["return_offsets_mapping"] = True
-        return json.dumps(tokenizer.apply_chat_template(**request).data)
+        # Remove model since it's already set in the app state
+        request.pop("model", None)
+
+        # Convert conversation to messages for ChatCompletionRequest
+        if "conversation" in request:
+            request["messages"] = request.pop("conversation")
+
+        result = _run_async(
+            app.state.openai_serving_chat.render_chat_request(
+                ChatCompletionRequest(**request)
+            )
+        )
+        if isinstance(result, ErrorResponse):
+            raise RuntimeError(f"Chat template error: {result.error.message}")
+        # result is tuple of (conversation, engine_prompts)
+        # engine_prompts[0] contains prompt_token_ids
+        _, engine_prompts = result
+        if not engine_prompts or len(engine_prompts) == 0:
+            raise RuntimeError("render_chat_request returned empty engine_prompts")
+        # Convert to match docstring format
+        return json.dumps(
+            {
+                "input_ids": engine_prompts[0].get("prompt_token_ids", []),
+                "offset_mapping": [],
+            }
+        )
 
     except Exception as e:
-        raise RuntimeError(f"Error applying chat template: {e}") from e
+        raise RuntimeError(
+            f"Error applying chat template ({type(e).__name__}): {e}"
+        ) from e
 
 
 def render(request_json: str) -> str:
@@ -144,26 +270,42 @@ def render(request_json: str) -> str:
     Returns:
         JSON string containing:
             - input_ids (list of int): The list of token IDs.
-            - offset_mapping (list of [int, int]): The list of offset mappings for each token.
+            - offset_mapping (list): Always empty. Offset mappings are not supported
+              by vLLM's render_completion_request API.
     """
     try:
+        # Parse the JSON request
         request = json.loads(request_json)
         key = request["key"]
         text = request["text"]
         add_special_tokens = request.get("add_special_tokens", False)
+        app = _app_cache.get(key)
+        if app is None:
+            raise RuntimeError(f"App with key {key} not found in cache")
 
-        tokenizer = _tokenizer_cache.get(key)
-        if tokenizer is None:
-            raise RuntimeError(f"Tokenizer with key {key} not found in cache")
-
+        result = _run_async(
+            app.state.openai_serving_completion.render_completion_request(
+                CompletionRequest(
+                    prompt=text,
+                    add_special_tokens=add_special_tokens,
+                )
+            )
+        )
+        if isinstance(result, ErrorResponse):
+            raise RuntimeError(f"Completion render error: {result.error.message}")
+        # result is list of dicts with prompt_token_ids
+        if not result or len(result) == 0:
+            raise RuntimeError("render_completion_request returned empty result")
+        # Convert to match docstring format
         return json.dumps(
-            tokenizer(
-                text, return_offsets_mapping=True, add_special_tokens=add_special_tokens
-            ).data
+            {
+                "input_ids": result[0].get("prompt_token_ids", []),
+                "offset_mapping": [],
+            }
         )
 
     except Exception as e:
-        raise RuntimeError(f"Error rendering text: {e}") from e
+        raise RuntimeError(f"Error rendering text ({type(e).__name__}): {e}") from e
 
 
 # python pkg/preprocessing/chat_completions/tokenizer_wrapper.py True '{"model": "/mnt/models/hub/models--ibm-granite--granite-3.3-8b-instruct/snapshots/51dd4bc2ade4059a6bd87649d68aa11e4fb2529b", "conversation": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "who are you?"}]}'

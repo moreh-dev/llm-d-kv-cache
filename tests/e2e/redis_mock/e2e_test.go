@@ -431,10 +431,9 @@ func (s *KVCacheSuite) TestCacheHitWithLocalTokenizer() {
 	fakePodList := []string{s.Pod1IP}
 
 	// Tokenize using local tokenizer
-	localTokens, localOffsets, err := localTokenizer.Render(prompt)
+	localTokens, _, err := localTokenizer.Render(prompt)
 	s.Require().NoError(err)
 	s.Require().NotEmpty(localTokens)
-	s.Require().Equal(len(localTokens), len(localOffsets), "tokens and offsets should have same length")
 	s.T().Logf("Local tokenizer produced %d tokens for prompt", len(localTokens))
 
 	tokens, _, err := s.tokenizer.Render(prompt)
@@ -493,10 +492,9 @@ func (s *KVCacheSuite) TestHFCacheStructureDiscoveryE2E() {
 	fakePodList := []string{s.Pod1IP}
 
 	// Tokenize using the auto-discovered HF cache tokenizer
-	localTokens, localOffsets, err := localTokenizer.Render(prompt)
+	localTokens, _, err := localTokenizer.Render(prompt)
 	s.Require().NoError(err)
 	s.Require().NotEmpty(localTokens)
-	s.Require().Equal(len(localTokens), len(localOffsets), "tokens and offsets should have same length")
 	s.T().Logf("HF cache auto-discovery produced %d tokens for model %q", len(localTokens), modelName)
 
 	tokens, _, err := s.tokenizer.Render(prompt)

@@ -37,3 +37,28 @@ type Tokenizer interface {
 	RenderChatTemplate(model string, messages []byte) (string, error)
 	Type() string
 }
+
+// TokenizerOptions holds common tokenizer configuration options shared by both
+// HuggingFace and Local tokenizer configurations.
+type TokenizerOptions struct {
+	// Tokenizer is the tokenizer to use. If not specified, defaults to the model path.
+	Tokenizer string `json:"tokenizer,omitempty"`
+	// TokenizerMode specifies the tokenizer mode. Options:
+	//   - "auto" (default): use mistral_common for Mistral models if available, otherwise "hf"
+	//   - "hf": use the fast tokenizer if available
+	//   - "slow": always use the slow tokenizer
+	//   - "mistral": always use the tokenizer from mistral_common
+	//   - "deepseek_v32": always use the tokenizer from deepseek_v32
+	TokenizerMode string `json:"tokenizerMode,omitempty"`
+	// TokenizerRevision is the revision of the tokenizer to use.
+	TokenizerRevision string `json:"tokenizerRevision,omitempty"`
+}
+
+// DefaultTokenizerOptions returns the default tokenizer options.
+func DefaultTokenizerOptions() TokenizerOptions {
+	return TokenizerOptions{
+		Tokenizer:         "",
+		TokenizerMode:     "auto",
+		TokenizerRevision: "",
+	}
+}

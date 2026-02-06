@@ -695,7 +695,7 @@ func TestLocalTokenizer(t *testing.T) {
 		require.NoError(t, err, "RenderChat should not return an error")
 		assert.NotEmpty(t, tokens, "tokens should not be empty")
 		assert.NotNil(t, offset, "offset should not be nil")
-		assert.Contains(t, tokens, uint32(7592), "tokens should contain 7592(hello)")
+		assert.Contains(t, tokens, uint32(13225), "tokens should contain 13225(hello)")
 	})
 
 	t.Run("Render", func(t *testing.T) {
@@ -707,7 +707,7 @@ func TestLocalTokenizer(t *testing.T) {
 		require.NoError(t, err, "Render should not return an error for local path")
 		assert.NotEmpty(t, tokens, "tokens should not be empty")
 		assert.NotNil(t, offset, "offset should not be nil")
-		assert.Contains(t, tokens, uint32(7592), "tokens should contain 7592(hello)")
+		assert.Contains(t, tokens, uint32(13225), "tokens should contain 13225(hello)")
 	})
 }
 

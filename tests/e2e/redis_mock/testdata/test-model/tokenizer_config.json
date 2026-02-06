@@ -1,42 +1,24 @@
 {
-  "add_bos_token": false,
-  "add_eos_token": false,
   "add_prefix_space": false,
   "added_tokens_decoder": {
-    "0": {
-      "content": "[PAD]",
+    "151643": {
+      "content": "<|endoftext|>",
       "lstrip": false,
       "normalized": false,
       "rstrip": false,
       "single_word": false,
       "special": true
     },
-    "100": {
-      "content": "[UNK]",
+    "151644": {
+      "content": "<|im_start|>",
       "lstrip": false,
       "normalized": false,
       "rstrip": false,
       "single_word": false,
       "special": true
     },
-    "101": {
-      "content": "[CLS]",
-      "lstrip": false,
-      "normalized": false,
-      "rstrip": false,
-      "single_word": false,
-      "special": true
-    },
-    "102": {
-      "content": "[SEP]",
-      "lstrip": false,
-      "normalized": false,
-      "rstrip": false,
-      "single_word": false,
-      "special": true
-    },
-    "103": {
-      "content": "[MASK]",
+    "151645": {
+      "content": "<|im_end|>",
       "lstrip": false,
       "normalized": false,
       "rstrip": false,
@@ -44,20 +26,15 @@
       "special": true
     }
   },
-  "bos_token": "[CLS]",
-  "chat_template": "{% for message in messages %}{{ message.role }}: {{ message.content }}\n{% endfor %}",
-  "clean_up_tokenization_spaces": true,
-  "cls_token": "[CLS]",
-  "do_basic_tokenize": true,
-  "do_lower_case": true,
-  "eos_token": "[SEP]",
-  "mask_token": "[MASK]",
-  "model_max_length": 512,
-  "never_split": null,
-  "pad_token": "[PAD]",
-  "sep_token": "[SEP]",
-  "strip_accents": null,
-  "tokenize_chinese_chars": true,
-  "tokenizer_class": "BertTokenizer",
-  "unk_token": "[UNK]"
+  "additional_special_tokens": ["<|im_start|>", "<|im_end|>"],
+  "bos_token": null,
+  "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n' }}{% endif %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}",
+  "clean_up_tokenization_spaces": false,
+  "eos_token": "<|im_end|>",
+  "errors": "replace",
+  "model_max_length": 32768,
+  "pad_token": "<|endoftext|>",
+  "split_special_tokens": false,
+  "tokenizer_class": "Qwen2Tokenizer",
+  "unk_token": null
 }

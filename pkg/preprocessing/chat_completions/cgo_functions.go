@@ -37,11 +37,14 @@ import (
 )
 
 type GetOrCreateTokenizerKeyRequest struct {
-	IsLocal     bool   `json:"is_local,omitempty"`
-	DownloadDir string `json:"download_dir,omitempty"`
-	Model       string `json:"model"`
-	Revision    string `json:"revision,omitempty"`
-	Token       string `json:"token,omitempty"`
+	IsLocal           bool   `json:"is_local,omitempty"`
+	DownloadDir       string `json:"download_dir,omitempty"`
+	Model             string `json:"model"`
+	Tokenizer         string `json:"tokenizer,omitempty"`
+	TokenizerMode     string `json:"tokenizer_mode,omitempty"`
+	Revision          string `json:"revision,omitempty"`
+	TokenizerRevision string `json:"tokenizer_revision,omitempty"`
+	Token             string `json:"token,omitempty"`
 }
 
 // Type aliases for backward compatibility - these types are now defined in tokenization/types.

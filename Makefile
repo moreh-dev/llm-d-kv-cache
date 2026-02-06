@@ -7,7 +7,9 @@ PROD_VERSION ?= 0.0.0
 IMAGE_TAG_BASE ?= ghcr.io/llm-d/$(PROJECT_NAME)
 IMG = $(IMAGE_TAG_BASE):$(DEV_VERSION)
 NAMESPACE ?= hc4ai-operator
-VLLM_VERSION := 0.14.0
+VLLM_VERSION := 0.15.0
+# Set to 1 to build vLLM from source (required if pre-built wheels don't work on your CPU)
+VLLM_BUILD_FROM_SOURCE ?= 0
 
 TARGETOS ?= $(shell go env GOOS)
 TARGETARCH ?= $(shell go env GOARCH)
@@ -122,6 +124,11 @@ install-python-deps: setup-venv ## installs dependencies.
 		exit 0; \
 	fi; \
 	echo "Installing vllm..."; \
+	if [ "$(VLLM_BUILD_FROM_SOURCE)" = "1" ]; then \
+		echo "Building vLLM from source (VLLM_BUILD_FROM_SOURCE=1)..."; \
+		PATH=$(VENV_BIN):$$PATH VLLM_TAG=v$(VLLM_VERSION) ./pkg/preprocessing/chat_completions/setup.sh; \
+		exit 0; \
+	fi; \
 	if [ "$(TARGETOS)" = "linux" ]; then \
 		if [ "$(TARGETARCH)" = "amd64" ]; then \
 			echo "Installing vLLM pre-built wheel for x86_64..."; \
@@ -131,17 +138,17 @@ install-python-deps: setup-venv ## installs dependencies.
 			$(VENV_BIN)/pip install https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}+cpu-cp38-abi3-manylinux_2_35_aarch64.whl; \
 		else \
 			echo "Unsupported Linux architecture: $(TARGETARCH). Falling back to setup.sh..."; \
-			PATH=$(VENV_BIN):$$PATH ./pkg/preprocessing/chat_completions/setup.sh; \
+			PATH=$(VENV_BIN):$$PATH VLLM_TAG=v$(VLLM_VERSION) ./pkg/preprocessing/chat_completions/setup.sh; \
 		fi; \
 	elif [ "$(TARGETOS)" = "darwin" ]; then \
 		echo "Building vLLM from source for macOS (pre-built wheels not available)..."; \
-		PATH=$(VENV_BIN):$$PATH ./pkg/preprocessing/chat_completions/setup.sh; \
+		PATH=$(VENV_BIN):$$PATH VLLM_TAG=v$(VLLM_VERSION) ./pkg/preprocessing/chat_completions/setup.sh; \
 	else \
 		echo "Unsupported OS: $(TARGETOS)"; \
 		exit 1; \
-	fi; \
-	echo "Verifying vllm installation..."; \
-	$(VENV_BIN)/python -c "import vllm; print('✅ vllm version ' + vllm.__version__ + ' installed.')" || { \
+	fi
+	@echo "Verifying vllm installation..."
+	@$(VENV_BIN)/python -c "import vllm; print('✅ vllm version ' + vllm.__version__ + ' installed.')" || { \
 		echo "ERROR: vllm library not properly installed in venv."; \
 		exit 1; \
 	}

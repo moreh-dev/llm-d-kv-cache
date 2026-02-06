@@ -69,7 +69,7 @@ func convertToPreprocessingConversation(messages []ChatMessage) []types.Conversa
 	for i, msg := range messages {
 		result[i] = types.Conversation{
 			Role:    msg.Role,
-			Content: msg.Content,
+			Content: types.Content{Raw: msg.Content},
 		}
 	}
 	return result

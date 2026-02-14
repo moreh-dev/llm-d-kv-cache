@@ -799,6 +799,9 @@ func (s *KVCacheSuite) TestLocalTokenizerChatTemplateErrorHandling() {
 	testModelDir, err := filepath.Abs(localTestModelDir)
 	s.Require().NoError(err)
 
+	err = preprocessing.ClearCaches(context.Background())
+	s.Require().NoError(err, "Failed to clear caches before test")
+
 	// Test 1: Non-existent model
 	_, err = tokenization.NewCachedLocalTokenizer(context.Background(), modelName, tokenization.LocalTokenizerConfig{
 		ModelTokenizerMap: map[string]string{

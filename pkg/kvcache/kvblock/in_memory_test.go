@@ -117,7 +117,7 @@ func TestInMemoryIndexPodCacheSize(t *testing.T) {
 }
 
 // TestSpeculativeAnnotation tests that speculative and confirmed PodEntries
-// are treated as separate entries due to the Annotation field, and that
+// are treated as separate entries due to the Annotations field, and that
 // evicting one does not affect the other.
 func TestSpeculativeAnnotation(t *testing.T) {
 	ctx := logging.NewTestLoggerIntoContext(t.Context())
@@ -127,7 +127,7 @@ func TestSpeculativeAnnotation(t *testing.T) {
 
 	t.Run("SpeculativeAddWithNilEngineKeys", func(t *testing.T) {
 		// Add a speculative entry with nil engineKeys (no engineKey mapping)
-		speculativePod := PodEntry{PodIdentifier: "10.0.0.1:8080", Annotation: "speculative"}
+		speculativePod := PodEntry{PodIdentifier: "10.0.0.1:8080", Annotations: Annotations{Source: "speculative"}}
 		err := index.Add(ctx, nil, []BlockHash{requestKey}, []PodEntry{speculativePod})
 		require.NoError(t, err)
 
@@ -149,14 +149,14 @@ func TestSpeculativeAnnotation(t *testing.T) {
 		podsPerKey, err := index.Lookup(ctx, []BlockHash{requestKey}, nil)
 		require.NoError(t, err)
 		assert.Len(t, podsPerKey[requestKey], 2)
-		assert.Contains(t, podsPerKey[requestKey], PodEntry{PodIdentifier: "10.0.0.1:8080", Annotation: "speculative"})
+		assert.Contains(t, podsPerKey[requestKey], PodEntry{PodIdentifier: "10.0.0.1:8080", Annotations: Annotations{Source: "speculative"}})
 		assert.Contains(t, podsPerKey[requestKey], PodEntry{PodIdentifier: "10.0.0.1:8080"})
 	})
 
 	t.Run("SpeculativeEvictPreservesConfirmed", func(t *testing.T) {
 		// Evict the speculative entry using requestKey directly (no engineKey mapping exists).
 		// Evict() falls back to treating the key as requestKey when engineKey mapping not found.
-		speculativePod := PodEntry{PodIdentifier: "10.0.0.1:8080", Annotation: "speculative"}
+		speculativePod := PodEntry{PodIdentifier: "10.0.0.1:8080", Annotations: Annotations{Source: "speculative"}}
 		err := index.Evict(ctx, requestKey, []PodEntry{speculativePod})
 		require.NoError(t, err)
 
@@ -166,7 +166,7 @@ func TestSpeculativeAnnotation(t *testing.T) {
 		assert.Len(t, podsPerKey[requestKey], 1)
 		assert.Contains(t, podsPerKey[requestKey], PodEntry{PodIdentifier: "10.0.0.1:8080"})
 		// Speculative should be gone
-		assert.NotContains(t, podsPerKey[requestKey], PodEntry{PodIdentifier: "10.0.0.1:8080", Annotation: "speculative"})
+		assert.NotContains(t, podsPerKey[requestKey], PodEntry{PodIdentifier: "10.0.0.1:8080", Annotations: Annotations{Source: "speculative"}})
 	})
 }
 
@@ -177,7 +177,7 @@ func TestSpeculativeEvictThenEmpty(t *testing.T) {
 	index := createInMemoryIndexForTesting(t)
 
 	requestKey := BlockHash(44444444)
-	speculativePod := PodEntry{PodIdentifier: "10.0.0.2:8080", Annotation: "speculative"}
+	speculativePod := PodEntry{PodIdentifier: "10.0.0.2:8080", Annotations: Annotations{Source: "speculative"}}
 
 	// Add speculative entry with nil engineKeys (no engineKey mapping)
 	err := index.Add(ctx, nil, []BlockHash{requestKey}, []PodEntry{speculativePod})
@@ -205,7 +205,7 @@ func TestAddWithNilEngineKeys(t *testing.T) {
 	index := createInMemoryIndexForTesting(t)
 
 	requestKey := BlockHash(55555555)
-	pod := PodEntry{PodIdentifier: "10.0.0.3:8080", Annotation: "speculative"}
+	pod := PodEntry{PodIdentifier: "10.0.0.3:8080", Annotations: Annotations{Source: "speculative"}}
 
 	// Add with nil engineKeys
 	err := index.Add(ctx, nil, []BlockHash{requestKey}, []PodEntry{pod})
@@ -227,9 +227,15 @@ func TestPodEntryString(t *testing.T) {
 	confirmed := PodEntry{PodIdentifier: "10.0.0.1:8080", DeviceTier: "gpu"}
 	assert.Equal(t, "10.0.0.1:8080@gpu", confirmed.String())
 
-	speculative := PodEntry{PodIdentifier: "10.0.0.1:8080", DeviceTier: "gpu", Annotation: "speculative"}
+	speculative := PodEntry{PodIdentifier: "10.0.0.1:8080", DeviceTier: "gpu", Annotations: Annotations{Source: "speculative"}}
 	assert.Equal(t, "10.0.0.1:8080@gpu[speculative]", speculative.String())
 
-	emptyAnnotation := PodEntry{PodIdentifier: "10.0.0.1:8080", DeviceTier: "gpu", Annotation: ""}
+	emptyAnnotation := PodEntry{PodIdentifier: "10.0.0.1:8080", DeviceTier: "gpu"}
 	assert.Equal(t, "10.0.0.1:8080@gpu", emptyAnnotation.String())
+
+	withBlockType := PodEntry{PodIdentifier: "10.0.0.1:8080", DeviceTier: "gpu", Annotations: Annotations{BlockType: "partial"}}
+	assert.Equal(t, "10.0.0.1:8080@gpu[partial]", withBlockType.String())
+
+	withBoth := PodEntry{PodIdentifier: "10.0.0.1:8080", DeviceTier: "gpu", Annotations: Annotations{Source: "speculative", BlockType: "partial"}}
+	assert.Equal(t, "10.0.0.1:8080@gpu[speculative,partial]", withBoth.String())
 }

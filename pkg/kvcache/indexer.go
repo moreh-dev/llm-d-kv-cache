@@ -125,7 +125,7 @@ func (k *Indexer) KVBlockIndex() kvblock.Index {
 
 // ComputeBlockKeys computes the KV-block keys for a given prompt and model name.
 // This method extracts the tokenization and block key computation logic so that
-// callers (e.g., PrepareDataPlugin) can compute block keys once and reuse them
+// callers (e.g., IGW::EPP::PrepareDataPlugin) can compute block keys once and reuse them
 // across multiple extension points without re-tokenizing.
 func (k *Indexer) ComputeBlockKeys(ctx context.Context, renderReq *types.RenderChatRequest, prompt, modelName string,
 ) ([]kvblock.BlockHash, error) {

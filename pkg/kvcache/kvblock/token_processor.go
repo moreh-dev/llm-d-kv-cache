@@ -18,6 +18,7 @@ package kvblock
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 
 	"github.com/fxamacker/cbor/v2"
@@ -62,15 +63,20 @@ type TokenProcessor interface {
 // It mimics the chunkedTokenDatabase in the Python code.
 type chunkedTokenDatabase struct {
 	TokenProcessorConfig
+	encoder cbor.EncMode // cached CBOR encoder for interoperable encoding
 }
 
 var _ TokenProcessor = &chunkedTokenDatabase{}
 
 // NewChunkedTokenDatabase creates a new instance with the given config and metadata.
-func NewChunkedTokenDatabase(config *TokenProcessorConfig) TokenProcessor {
+func NewChunkedTokenDatabase(config *TokenProcessorConfig) (TokenProcessor, error) {
 	if config == nil {
 		config = DefaultTokenProcessorConfig()
-	} // TODO: validate?
+	}
+
+	if config.BlockSize <= 0 {
+		return nil, fmt.Errorf("blockSize must be greater than 0, got %d", config.BlockSize)
+	}
 
 	if config.initHash == 0 {
 		// Create initial hash
@@ -79,9 +85,15 @@ func NewChunkedTokenDatabase(config *TokenProcessorConfig) TokenProcessor {
 		config.initHash = h.Sum64()
 	}
 
+	encoder, err := cbor.CanonicalEncOptions().EncMode()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CBOR encoder: %w", err)
+	}
+
 	return &chunkedTokenDatabase{
 		TokenProcessorConfig: *config,
-	}
+		encoder:              encoder,
+	}, nil
 }
 
 // getInitHash returns the initial hash for the given model name.
@@ -102,13 +114,7 @@ func (db *chunkedTokenDatabase) getInitHash(modelName string) uint64 {
 func (db *chunkedTokenDatabase) hash(parent uint64, tokens []uint32, extra interface{}) uint64 {
 	payload := []interface{}{parent, tokens, extra}
 
-	encMode, err := cbor.CanonicalEncOptions().EncMode() // deterministic
-	if err != nil {
-		log.FromContext(context.Background()).Error(err, "failed to create CBOR encoder")
-		return 0
-	}
-
-	b, err := encMode.Marshal(payload)
+	b, err := db.encoder.Marshal(payload)
 	if err != nil {
 		log.FromContext(context.Background()).Error(err, "failed to marshal payload to CBOR")
 		return 0

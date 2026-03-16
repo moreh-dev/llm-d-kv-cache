@@ -253,19 +253,24 @@ func (m *InMemoryIndex) Evict(ctx context.Context, engineKey BlockHash, entries 
 
 	// Remove key from main cache if empty.
 	// Re-fetch and hold the lock through removal to prevent racing with Add.
-	if isEmpty {
-		if currentCache, stillExists := m.data.Get(requestKey); stillExists && currentCache != nil {
-			currentCache.mu.Lock()
-			if currentCache.cache.Len() == 0 {
-				m.data.Remove(requestKey)
-				if hasEngineKeyMapping {
-					m.engineToRequestKeys.Remove(engineKey)
-				}
-				traceLogger.Info("removed requestKey from index as no pods remain", "requestKey", requestKey, "engineKey", engineKey)
-			}
-			currentCache.mu.Unlock()
-		}
+	if !isEmpty {
+		return nil
 	}
+
+	currentCache, stillExists := m.data.Get(requestKey)
+	if !stillExists || currentCache == nil {
+		return nil
+	}
+
+	currentCache.mu.Lock()
+	if currentCache.cache.Len() == 0 {
+		m.data.Remove(requestKey)
+		if hasEngineKeyMapping {
+			m.engineToRequestKeys.Remove(engineKey)
+		}
+		traceLogger.Info("removed requestKey from index as no pods remain", "requestKey", requestKey, "engineKey", engineKey)
+	}
+	currentCache.mu.Unlock()
 
 	return nil
 }

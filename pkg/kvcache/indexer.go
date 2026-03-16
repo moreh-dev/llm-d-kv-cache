@@ -163,69 +163,18 @@ func (k *Indexer) ComputeBlockKeys(ctx context.Context, renderReq *types.RenderC
 func (k *Indexer) GetPodScores(ctx context.Context, renderReq *types.RenderChatRequest, prompt, modelName string,
 	podIdentifiers []string,
 ) (map[string]float64, error) {
-	// Start tracing span for main operation
-	tracer := otel.Tracer(telemetry.InstrumentationName)
-	ctx, span := tracer.Start(ctx, "llm_d.kv_cache.get_scores",
-		trace.WithSpanKind(trace.SpanKindInternal),
-	)
-	defer span.End()
+	// 1. tokenize prompt
+	tokens := k.tokenizersPool.Tokenize(renderReq, prompt)
 
-	// Set initial attributes
-	span.SetAttributes(
-		attribute.String("gen_ai.request.model", modelName),
-		attribute.Int("llm_d.kv_cache.pod_count", len(podIdentifiers)),
-	)
-
-	traceLogger := log.FromContext(ctx).V(logging.TRACE).WithName("kvcache.GetPodScores")
-
-	// 1-3. Compute block keys (tokenize + truncate + hash)
-	blockKeys, err := k.ComputeBlockKeys(ctx, renderReq, prompt, modelName)
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		return nil, fmt.Errorf("failed to compute block keys: %w", err)
-	}
-	span.SetAttributes(attribute.Int("llm_d.kv_cache.block_keys.count", len(blockKeys)))
-	if len(blockKeys) == 0 {
-		traceLogger.Info("no block keys found, returning empty scores")
-		//nolint:nilnil // no need to return an error
-		return nil, nil
-	}
-	traceLogger.Info("found block keys", "block-keys", blockKeys)
-
-	// query kvblock indexer for pods
-	keyToPods, err := k.kvBlockIndex.Lookup(ctx, blockKeys, sets.New(podIdentifiers...))
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		return nil, fmt.Errorf("failed to query kvblock indexer: %w", err)
-	}
-	traceLogger.Info("found block keys", "block-keys", blockKeys,
-		"pods", podsPerKeyPrintHelper(keyToPods))
-
-	// Calculate block-level hit ratio (blocks found / blocks requested).
-	blocksFound := 0
-	for _, pods := range keyToPods {
-		if len(pods) > 0 {
-			blocksFound++
+	// 2. Truncate prompt (if set in the request)
+	if renderReq != nil && renderReq.TruncatePromptTokens != nil {
+		limit := *renderReq.TruncatePromptTokens
+		if limit > 0 && len(tokens) > limit {
+			tokens = tokens[len(tokens)-limit:]
 		}
 	}
-	blockHitRatio := 0.0
-	if len(blockKeys) > 0 {
-		blockHitRatio = float64(blocksFound) / float64(len(blockKeys))
-	}
-	span.SetAttributes(
-		attribute.Float64("llm_d.kv_cache.block_hit_ratio", blockHitRatio),
-		attribute.Int("llm_d.kv_cache.blocks_found", blocksFound),
-	)
 
-	// 5. score pods
-	podScores, err := k.kvBlockScorer.Score(ctx, blockKeys, keyToPods)
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		return nil, fmt.Errorf("failed to query kvblock scorer: %w", err)
-	}
-	traceLogger.Info("found pod scores", "pod-scores", podScores)
-
-	return podScores, nil
+	return k.ScoreTokens(ctx, tokens, modelName, podIdentifiers)
 }
 
 // ScoreTokens computes pod scores for the given tokens and model.

@@ -1,5 +1,3 @@
-//go:build embedded_tokenizers
-
 /*
 Copyright 2026 The llm-d Authors.
 
@@ -19,7 +17,7 @@ limitations under the License.
 package kvcache_test
 
 import (
-	"path/filepath"
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,106 +26,341 @@ import (
 	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache"
 	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache/kvblock"
 	"github.com/llm-d/llm-d-kv-cache/pkg/tokenization"
+	"github.com/llm-d/llm-d-kv-cache/pkg/tokenization/types"
 	"github.com/llm-d/llm-d-kv-cache/pkg/utils/logging"
 )
 
+// --- mock implementations ---------------------------------------------------
+
+// mockTokenProcessor implements kvblock.TokenProcessor for testing.
+// It records the tokens it receives so tests can assert on them.
+type mockTokenProcessor struct {
+	blockKeys      []kvblock.BlockHash
+	receivedTokens []uint32
+}
+
+func (m *mockTokenProcessor) TokensToKVBlockKeys(_ kvblock.BlockHash, tokens []uint32, _ string) []kvblock.BlockHash {
+	m.receivedTokens = tokens
+	return m.blockKeys
+}
+
+// mockTokenizersPool implements kvcache.TokenizersPool for testing.
+type mockTokenizersPool struct {
+	tokens []uint32
+}
+
+func (m *mockTokenizersPool) Tokenize(_ *types.RenderChatRequest, _ string) []uint32 {
+	return m.tokens
+}
+
+func (m *mockTokenizersPool) Run(_ context.Context) {}
+
+func (m *mockTokenizersPool) SetTokenizer(_ tokenization.Tokenizer, _ string) {}
+
+// --- helpers ----------------------------------------------------------------
+
 const (
-	testModelName = "test-model"
+	testModel = "test-model"
+	testPodA  = "pod-a"
+	testPodB  = "pod-b"
 )
 
-func newTestIndexer(t *testing.T) *kvcache.Indexer {
+func u64ToBlockKeys(keys []uint64) []kvblock.BlockHash {
+	out := make([]kvblock.BlockHash, len(keys))
+	for i, k := range keys {
+		out[i] = kvblock.BlockHash(k)
+	}
+	return out
+}
+
+// newTestIndexer creates an Indexer backed by an in-memory index, a mock
+// tokenizers pool, and a LongestPrefixScorer using the project's default
+// backend weights.
+func newTestIndexer(t *testing.T, tp kvblock.TokenProcessor, pool kvcache.TokenizersPool) *kvcache.Indexer {
 	t.Helper()
-	ctx := logging.NewTestLoggerIntoContext(t.Context())
 
-	modelDir := filepath.Join("..", "..", "tests", "e2e", "redis_mock", "testdata")
-	localTokenizerConfig := tokenization.LocalTokenizerConfig{
-		ModelTokenizerMap: map[string]string{
-			testModelName: filepath.Join(modelDir, testModelName, "tokenizer.json"),
-		},
-	}
-
-	config, err := kvcache.NewDefaultConfig()
+	idx, err := kvblock.NewInMemoryIndex(kvblock.DefaultInMemoryIndexConfig())
 	require.NoError(t, err)
-	config.TokenizersPoolConfig = &tokenization.Config{
-		ModelName:             testModelName,
-		WorkersCount:          1,
-		MinPrefixOverlapRatio: 0.8,
-		LocalTokenizerConfig:  &localTokenizerConfig,
-	}
 
-	tokenProcessor := kvblock.NewChunkedTokenDatabase(kvblock.DefaultTokenProcessorConfig())
-
-	indexer, err := kvcache.NewKVCacheIndexer(ctx, config, tokenProcessor)
+	scorer, err := kvcache.NewKVBlockScorer(kvcache.DefaultKVBlockScorerConfig())
 	require.NoError(t, err)
-	go indexer.Run(ctx)
 
-	return indexer
+	return kvcache.NewIndexerForTest(tp, idx, scorer, pool)
 }
 
-// TestComputeBlockKeys verifies that ComputeBlockKeys produces non-empty block
-// keys for a valid prompt, and that calling it twice with the same input yields
-// identical results.
-func TestComputeBlockKeys(t *testing.T) {
-	ctx := logging.NewTestLoggerIntoContext(t.Context())
-	indexer := newTestIndexer(t)
-
-	prompt := "One morning, when Gregor Samsa woke from troubled dreams, " +
-		"he found himself transformed in his bed into a horrible vermin. " +
-		"He lay on his armour-like back, and if he lifted his head a little he could see his brown belly, " +
-		"slightly domed and divided by arches into stiff sections."
-
-	blockKeys, err := indexer.ComputeBlockKeys(ctx, nil, prompt, testModelName)
-	require.NoError(t, err)
-	require.NotEmpty(t, blockKeys, "Expected non-empty block keys for a long prompt")
-
-	// Calling again with the same input should produce identical results
-	blockKeys2, err := indexer.ComputeBlockKeys(ctx, nil, prompt, testModelName)
-	require.NoError(t, err)
-	assert.Equal(t, blockKeys, blockKeys2, "ComputeBlockKeys should be deterministic")
-}
-
-// TestComputeBlockKeysConsistentWithGetPodScores verifies that ComputeBlockKeys
-// produces block keys that match what GetPodScores uses internally. Since
-// GetPodScores delegates to ComputeBlockKeys, we verify by adding known block
-// keys to the index, then checking that GetPodScores finds them.
-func TestComputeBlockKeysConsistentWithGetPodScores(t *testing.T) {
-	ctx := logging.NewTestLoggerIntoContext(t.Context())
-	indexer := newTestIndexer(t)
-
-	prompt := "One morning, when Gregor Samsa woke from troubled dreams, " +
-		"he found himself transformed in his bed into a horrible vermin. " +
-		"He lay on his armour-like back, and if he lifted his head a little he could see his brown belly, " +
-		"slightly domed and divided by arches into stiff sections."
-
-	// Step 1: Compute block keys
-	blockKeys, err := indexer.ComputeBlockKeys(ctx, nil, prompt, testModelName)
-	require.NoError(t, err)
-	require.NotEmpty(t, blockKeys)
-
-	// Step 2: Add these block keys to the index for a test pod
-	podAddr := "10.0.0.1:8080"
-	kvBlockIndex := indexer.KVBlockIndex()
-	for _, key := range blockKeys {
-		err := kvBlockIndex.Add(ctx, []kvblock.BlockHash{key}, []kvblock.BlockHash{key}, []kvblock.PodEntry{
-			{PodIdentifier: podAddr},
-		})
+// populateIndex inserts block-key -> pod entries into the index.
+func populateIndex(t *testing.T, idx kvblock.Index, entries map[kvblock.BlockHash][]kvblock.PodEntry) {
+	t.Helper()
+	ctx := logging.NewTestLoggerIntoContext(context.Background())
+	for key, pods := range entries {
+		err := idx.Add(ctx, []kvblock.BlockHash{key}, []kvblock.BlockHash{key}, pods)
 		require.NoError(t, err)
 	}
-
-	// Step 3: GetPodScores should find the pod and give it a score
-	scores, err := indexer.GetPodScores(ctx, nil, prompt, testModelName, []string{podAddr})
-	require.NoError(t, err)
-	require.Contains(t, scores, podAddr, "GetPodScores should find the pod using the same block keys")
-	assert.Greater(t, scores[podAddr], 0.0, "Pod should have a positive score")
 }
 
-// TestComputeBlockKeysEmptyPrompt verifies that an empty or too-short prompt
-// returns nil block keys without error.
-func TestComputeBlockKeysEmptyPrompt(t *testing.T) {
-	ctx := logging.NewTestLoggerIntoContext(t.Context())
-	indexer := newTestIndexer(t)
+// --- scoring tests (shared scenarios) ---------------------------------------
 
-	blockKeys, err := indexer.ComputeBlockKeys(ctx, nil, "", testModelName)
+// scoringTestCase defines a scenario exercised through both GetPodScores and
+// ScoreTokens.
+type scoringTestCase struct {
+	name           string
+	blockKeys      []uint64
+	tokens         []uint32
+	indexEntries   map[kvblock.BlockHash][]kvblock.PodEntry
+	podIdentifiers []string
+	wantScores     map[string]float64 // expected pod -> score (checked with InDelta)
+	wantNil        bool               // if true, expect nil scores (not just empty)
+}
+
+var scoringTests = []scoringTestCase{
+	{
+		name:      "empty tokens",
+		blockKeys: nil,
+		tokens:    nil,
+		wantNil:   true,
+	},
+	{
+		name:       "no matching pods",
+		blockKeys:  []uint64{100, 200, 300},
+		tokens:     []uint32{1, 2, 3},
+		wantScores: map[string]float64{},
+	},
+	{
+		name:      "single pod full match",
+		blockKeys: []uint64{10, 20, 30},
+		tokens:    []uint32{1, 2, 3},
+		indexEntries: map[kvblock.BlockHash][]kvblock.PodEntry{
+			10: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+			20: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+			30: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+		},
+		wantScores: map[string]float64{testPodA: 3.0},
+	},
+	{
+		name:      "multiple pods",
+		blockKeys: []uint64{10, 20, 30},
+		tokens:    []uint32{1, 2, 3},
+		indexEntries: map[kvblock.BlockHash][]kvblock.PodEntry{
+			10: {
+				{PodIdentifier: testPodA, DeviceTier: "gpu"},
+				{PodIdentifier: testPodB, DeviceTier: "gpu"},
+			},
+			20: {
+				{PodIdentifier: testPodA, DeviceTier: "gpu"},
+				{PodIdentifier: testPodB, DeviceTier: "gpu"},
+			},
+			30: {
+				{PodIdentifier: testPodA, DeviceTier: "gpu"},
+			},
+		},
+		wantScores: map[string]float64{testPodA: 3.0, testPodB: 2.0},
+	},
+	{
+		name:      "mixed device tiers",
+		blockKeys: []uint64{10, 20},
+		tokens:    []uint32{1, 2},
+		indexEntries: map[kvblock.BlockHash][]kvblock.PodEntry{
+			10: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+			20: {{PodIdentifier: testPodA, DeviceTier: "cpu"}},
+		},
+		wantScores: map[string]float64{testPodA: 1.8}, // gpu(1.0) + cpu(0.8)
+	},
+	{
+		name:      "pod identifier filter",
+		blockKeys: []uint64{10, 20},
+		tokens:    []uint32{1, 2},
+		indexEntries: map[kvblock.BlockHash][]kvblock.PodEntry{
+			10: {
+				{PodIdentifier: testPodA, DeviceTier: "gpu"},
+				{PodIdentifier: testPodB, DeviceTier: "gpu"},
+			},
+			20: {
+				{PodIdentifier: testPodA, DeviceTier: "gpu"},
+				{PodIdentifier: testPodB, DeviceTier: "gpu"},
+			},
+		},
+		podIdentifiers: []string{testPodA},
+		wantScores:     map[string]float64{testPodA: 2.0},
+	},
+	{
+		name:      "prefix break",
+		blockKeys: []uint64{10, 20, 30},
+		tokens:    []uint32{1, 2, 3},
+		indexEntries: map[kvblock.BlockHash][]kvblock.PodEntry{
+			10: {
+				{PodIdentifier: testPodA, DeviceTier: "gpu"},
+				{PodIdentifier: testPodB, DeviceTier: "gpu"},
+			},
+			20: {
+				{PodIdentifier: testPodA, DeviceTier: "gpu"},
+				// testPodB missing => prefix breaks for podB
+			},
+			30: {
+				{PodIdentifier: testPodA, DeviceTier: "gpu"},
+				{PodIdentifier: testPodB, DeviceTier: "gpu"},
+			},
+		},
+		wantScores: map[string]float64{testPodA: 3.0, testPodB: 1.0},
+	},
+	{
+		name:      "empty pod identifiers returns all",
+		blockKeys: []uint64{10},
+		tokens:    []uint32{1},
+		indexEntries: map[kvblock.BlockHash][]kvblock.PodEntry{
+			10: {
+				{PodIdentifier: testPodA, DeviceTier: "gpu"},
+				{PodIdentifier: testPodB, DeviceTier: "gpu"},
+			},
+		},
+		podIdentifiers: []string{},
+		wantScores:     map[string]float64{testPodA: 1.0, testPodB: 1.0},
+	},
+	{
+		name:      "deterministic",
+		blockKeys: []uint64{10, 20},
+		tokens:    []uint32{42, 43},
+		indexEntries: map[kvblock.BlockHash][]kvblock.PodEntry{
+			10: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+			20: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+		},
+		wantScores: map[string]float64{testPodA: 2.0},
+	},
+}
+
+// assertScores verifies that the returned scores match expectations.
+func assertScores(t *testing.T, tt *scoringTestCase, scores map[string]float64, err error) {
+	t.Helper()
 	require.NoError(t, err)
-	assert.Nil(t, blockKeys, "Empty prompt should produce nil block keys")
+
+	if tt.wantNil {
+		assert.Nil(t, scores, "expected nil scores")
+		return
+	}
+
+	require.Len(t, scores, len(tt.wantScores), "unexpected number of scored pods")
+	for pod, want := range tt.wantScores {
+		require.Contains(t, scores, pod, "missing pod %q in scores", pod)
+		assert.InDelta(t, want, scores[pod], 0.0001, "pod %q score mismatch", pod)
+	}
+}
+
+func TestGetPodScores(t *testing.T) {
+	for _, tt := range scoringTests {
+		t.Run(tt.name, func(t *testing.T) {
+			tp := &mockTokenProcessor{blockKeys: u64ToBlockKeys(tt.blockKeys)}
+			pool := &mockTokenizersPool{tokens: tt.tokens}
+			indexer := newTestIndexer(t, tp, pool)
+
+			ctx := logging.NewTestLoggerIntoContext(context.Background())
+			if tt.indexEntries != nil {
+				populateIndex(t, indexer.KVBlockIndex(), tt.indexEntries)
+			}
+
+			scores, err := indexer.GetPodScores(ctx, nil, "hello", testModel, tt.podIdentifiers)
+			assertScores(t, &tt, scores, err)
+		})
+	}
+}
+
+func TestScoreTokens(t *testing.T) {
+	for _, tt := range scoringTests {
+		t.Run(tt.name, func(t *testing.T) {
+			tp := &mockTokenProcessor{blockKeys: u64ToBlockKeys(tt.blockKeys)}
+			indexer := newTestIndexer(t, tp, &mockTokenizersPool{})
+
+			ctx := logging.NewTestLoggerIntoContext(context.Background())
+			if tt.indexEntries != nil {
+				populateIndex(t, indexer.KVBlockIndex(), tt.indexEntries)
+			}
+
+			scores, err := indexer.ScoreTokens(ctx, tt.tokens, testModel, tt.podIdentifiers)
+			assertScores(t, &tt, scores, err)
+		})
+	}
+}
+
+// --- GetPodScores-specific tests --------------------------------------------
+// These cover behavior unique to GetPodScores that ScoreTokens
+// does not have (i.e. prompt truncation).
+
+func TestGetPodScores_TruncatePromptTokens(t *testing.T) {
+	// The mock pool returns 5 tokens. With TruncatePromptTokens=3, only
+	// the last 3 tokens (300, 400, 500) should be passed to the token
+	// processor. We verify this via tp.receivedTokens.
+	blockKeys := u64ToBlockKeys([]uint64{10, 20, 30})
+	tp := &mockTokenProcessor{blockKeys: blockKeys}
+	pool := &mockTokenizersPool{tokens: []uint32{100, 200, 300, 400, 500}}
+	indexer := newTestIndexer(t, tp, pool)
+
+	ctx := logging.NewTestLoggerIntoContext(context.Background())
+	populateIndex(t, indexer.KVBlockIndex(), map[kvblock.BlockHash][]kvblock.PodEntry{
+		10: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+		20: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+		30: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+	})
+
+	truncateLimit := 3
+	renderReq := &types.RenderChatRequest{
+		TruncatePromptTokens: &truncateLimit,
+	}
+
+	scores, err := indexer.GetPodScores(ctx, renderReq, "", testModel, nil)
+	require.NoError(t, err)
+	require.Contains(t, scores, testPodA)
+	assert.InDelta(t, 3.0, scores[testPodA], 0.0001)
+	assert.Equal(t, []uint32{300, 400, 500}, tp.receivedTokens,
+		"token processor should receive only the last 3 tokens after truncation")
+}
+
+func TestGetPodScores_TruncateNoOp(t *testing.T) {
+	// TruncatePromptTokens is set but larger than the token count — no
+	// truncation should happen, all tokens are passed through.
+	blockKeys := u64ToBlockKeys([]uint64{10, 20})
+	tp := &mockTokenProcessor{blockKeys: blockKeys}
+	pool := &mockTokenizersPool{tokens: []uint32{1, 2}}
+	indexer := newTestIndexer(t, tp, pool)
+
+	ctx := logging.NewTestLoggerIntoContext(context.Background())
+	populateIndex(t, indexer.KVBlockIndex(), map[kvblock.BlockHash][]kvblock.PodEntry{
+		10: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+		20: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+	})
+
+	truncateLimit := 100 // larger than token count
+	renderReq := &types.RenderChatRequest{
+		TruncatePromptTokens: &truncateLimit,
+	}
+
+	scores, err := indexer.GetPodScores(ctx, renderReq, "", testModel, nil)
+	require.NoError(t, err)
+	require.Contains(t, scores, testPodA)
+	assert.InDelta(t, 2.0, scores[testPodA], 0.0001)
+	assert.Equal(t, []uint32{1, 2}, tp.receivedTokens,
+		"token processor should receive all tokens when limit exceeds count")
+}
+
+func TestGetPodScores_TruncateZero(t *testing.T) {
+	// TruncatePromptTokens=0 should not truncate (the code checks limit > 0).
+	blockKeys := u64ToBlockKeys([]uint64{10, 20})
+	tp := &mockTokenProcessor{blockKeys: blockKeys}
+	pool := &mockTokenizersPool{tokens: []uint32{1, 2}}
+	indexer := newTestIndexer(t, tp, pool)
+
+	ctx := logging.NewTestLoggerIntoContext(context.Background())
+	populateIndex(t, indexer.KVBlockIndex(), map[kvblock.BlockHash][]kvblock.PodEntry{
+		10: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+		20: {{PodIdentifier: testPodA, DeviceTier: "gpu"}},
+	})
+
+	truncateLimit := 0
+	renderReq := &types.RenderChatRequest{
+		TruncatePromptTokens: &truncateLimit,
+	}
+
+	scores, err := indexer.GetPodScores(ctx, renderReq, "", testModel, nil)
+	require.NoError(t, err)
+	require.Contains(t, scores, testPodA)
+	assert.InDelta(t, 2.0, scores[testPodA], 0.0001, "zero limit should not truncate")
+	assert.Equal(t, []uint32{1, 2}, tp.receivedTokens,
+		"token processor should receive all tokens when limit is zero")
 }

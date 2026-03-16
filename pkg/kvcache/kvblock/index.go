@@ -129,11 +129,25 @@ type Index interface {
 	Lookup(ctx context.Context, requestKeys []BlockHash, podIdentifierSet sets.Set[string]) (map[BlockHash][]PodEntry, error)
 	// Add adds a set of engineKeys/requestKeys and their associated pod entries to the index backend.
 	Add(ctx context.Context, engineKeys, requestKeys []BlockHash, entries []PodEntry) error
-	// Evict removes an engineKey and its associated pod entries from the index backend.
-	Evict(ctx context.Context, engineKey BlockHash, entries []PodEntry) error
+	// Evict removes a key and its associated pod entries from the index backend.
+	// keyType indicates whether the key is an EngineKey (requires engine→request lookup)
+	// or a RequestKey (used directly).
+	Evict(ctx context.Context, key BlockHash, keyType KeyType, entries []PodEntry) error
 	// GetRequestKey returns the requestKey associated with the given engineKey.
 	GetRequestKey(ctx context.Context, engineKey BlockHash) (BlockHash, error)
 }
+
+// KeyType indicates whether a key passed to Evict is an engine key or a request key.
+type KeyType int
+
+const (
+	// EngineKey means the key is an engine-assigned key that must be resolved
+	// to a request key via the engineToRequestKeys mapping.
+	EngineKey KeyType = iota
+	// RequestKey means the key is a request key and can be used directly.
+	// This is used for speculative entries that were added without engineKey mapping.
+	RequestKey
+)
 
 // BlockHash struct represents a unique identifier for a KV-cache block.
 type BlockHash uint64

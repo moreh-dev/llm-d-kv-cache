@@ -197,7 +197,7 @@ func testEvictBasic(t *testing.T, ctx context.Context, index Index) {
 		{PodIdentifier: "pod3", DeviceTier: "cpu"}, // Device tier may differ from stored entry
 	}
 
-	err = index.Evict(ctx, engineKey, evictEntries)
+	err = index.Evict(ctx, engineKey, EngineKey, evictEntries)
 	require.NoError(t, err)
 
 	// Verify that pod1 was evicted but pod2 and pod3 remain
@@ -242,7 +242,7 @@ func testConcurrentOperations(t *testing.T, ctx context.Context, index Index) {
 					}
 				case 2: // Evict
 					entries := []PodEntry{{PodIdentifier: fmt.Sprintf("pod-%d-%d", id, operationIndex-2), DeviceTier: "gpu"}}
-					if err := index.Evict(ctx, engineKey, entries); err != nil {
+					if err := index.Evict(ctx, engineKey, EngineKey, entries); err != nil {
 						errChan <- err
 					}
 				}

@@ -260,7 +260,9 @@ func (m *CostAwareMemoryIndex) Lookup(ctx context.Context, requestKeys []BlockHa
 }
 
 // Evict removes a key and its associated pod entries from the index backend.
-func (m *CostAwareMemoryIndex) Evict(ctx context.Context, engineKey BlockHash, entries []PodEntry) error {
+// keyType indicates whether the key is an EngineKey (requires engine→request lookup)
+// or a RequestKey (used directly for speculative entries without engineKey mapping).
+func (m *CostAwareMemoryIndex) Evict(ctx context.Context, key BlockHash, keyType KeyType, entries []PodEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -270,17 +272,33 @@ func (m *CostAwareMemoryIndex) Evict(ctx context.Context, engineKey BlockHash, e
 
 	traceLogger := log.FromContext(ctx).V(logging.TRACE).WithName("kvblock.CostAwareMemoryIndex.Evict")
 
-	requestKey, found := m.requestKeys.Get(engineKey)
-	if !found {
-		traceLogger.Info("engineKey not found in index, nothing to evict", "engineKey", engineKey)
-		return nil
+	var requestKey BlockHash
+	hasEngineKeyMapping := false
+
+	switch keyType {
+	case EngineKey:
+		rk, found := m.requestKeys.Get(key)
+		if !found {
+			traceLogger.Info("engineKey not found in mapping, nothing to evict", "engineKey", key)
+			return nil
+		}
+		requestKey = rk
+		hasEngineKeyMapping = true
+	case RequestKey:
+		requestKey = key
+	default:
+		return fmt.Errorf("unknown key type: %d", keyType)
 	}
 
 	keyStr := requestKey.String()
 	podCache, found := m.data.Get(keyStr)
 	if !found || podCache == nil {
-		traceLogger.Info("requestKey not found in index, cleaning up engineKey", "requestKey", requestKey, "engineKey", engineKey)
-		m.requestKeys.Remove(engineKey)
+		if hasEngineKeyMapping {
+			traceLogger.Info("requestKey not found in index, cleaning up engineKey", "requestKey", requestKey, "engineKey", key)
+			m.requestKeys.Remove(key)
+		} else {
+			traceLogger.Info("key not found in index, nothing to evict", "key", key)
+		}
 		return nil
 	}
 
@@ -292,12 +310,13 @@ func (m *CostAwareMemoryIndex) Evict(ctx context.Context, engineKey BlockHash, e
 
 	if podCache.Len() == 0 {
 		m.data.Del(keyStr)
-		m.requestKeys.Remove(engineKey)
-
-		traceLogger.Info("removed requestKey from index as no pods remain", "requestKey", requestKey, "engineKey", engineKey)
+		if hasEngineKeyMapping {
+			m.requestKeys.Remove(key)
+		}
+		traceLogger.Info("removed requestKey from index as no pods remain", "requestKey", requestKey, "key", key)
 	} else if podCacheLenBefore != podCache.Len() {
 		m.data.Set(keyStr, podCache, podCache.CalculateByteSize(keyStr))
-		traceLogger.Info("evicted pods from engineKey", "requestKey", requestKey, "engineKey", engineKey, "pods", entries)
+		traceLogger.Info("evicted pods from key", "requestKey", requestKey, "key", key, "keyType", keyType, "pods", entries)
 	}
 	m.data.Wait()
 	return nil

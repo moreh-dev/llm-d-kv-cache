@@ -156,9 +156,8 @@ func TestSpeculativeAnnotation(t *testing.T) {
 
 	t.Run("SpeculativeEvictPreservesConfirmed", func(t *testing.T) {
 		// Evict the speculative entry using requestKey directly (no engineKey mapping exists).
-		// Evict() falls back to treating the key as requestKey when engineKey mapping not found.
 		speculativePod := PodEntry{PodIdentifier: "10.0.0.1:8080", Speculative: true}
-		err := index.Evict(ctx, requestKey, []PodEntry{speculativePod})
+		err := index.Evict(ctx, requestKey, RequestKey, []PodEntry{speculativePod})
 		require.NoError(t, err)
 
 		// Confirmed entry should remain
@@ -190,8 +189,8 @@ func TestSpeculativeEvictThenEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, podsPerKey[requestKey], 1)
 
-	// Evict speculative entry using requestKey (Evict falls back to requestKey)
-	err = index.Evict(ctx, requestKey, []PodEntry{speculativePod})
+	// Evict speculative entry using requestKey directly
+	err = index.Evict(ctx, requestKey, RequestKey, []PodEntry{speculativePod})
 	require.NoError(t, err)
 
 	// Lookup should return empty

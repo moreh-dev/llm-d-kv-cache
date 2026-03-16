@@ -259,21 +259,30 @@ func (r *RedisIndex) Add(ctx context.Context, engineKeys, requestKeys []BlockHas
 	return nil
 }
 
-// Evict removes an engineKey and its associated pod entries from the index backend.
-// If the engineKey is not found in the engineToRequestKeys mapping, it falls back to
-// treating the key as a requestKey directly. This supports eviction of speculative entries
-// that were added without engineKey mapping (nil engineKeys in Add).
-func (r *RedisIndex) Evict(ctx context.Context, engineKey BlockHash, entries []PodEntry) error {
+// Evict removes a key and its associated pod entries from the index backend.
+// keyType indicates whether the key is an EngineKey (requires engine→request lookup)
+// or a RequestKey (used directly for speculative entries without engineKey mapping).
+func (r *RedisIndex) Evict(ctx context.Context, key BlockHash, keyType KeyType, entries []PodEntry) error {
 	if len(entries) == 0 {
 		return fmt.Errorf("no entries provided for eviction from index")
 	}
 
-	requestKey, err := r.GetRequestKey(ctx, engineKey)
-	hasEngineKeyMapping := err == nil
-	if !hasEngineKeyMapping {
-		// Fallback: treat engineKey as requestKey directly.
-		// This is used for speculative entries added without engineKey mapping.
-		requestKey = engineKey
+	var requestKey BlockHash
+	hasEngineKeyMapping := false
+
+	switch keyType {
+	case EngineKey:
+		rk, err := r.GetRequestKey(ctx, key)
+		if err != nil {
+			// Engine key not found in mapping — nothing to evict
+			return nil
+		}
+		requestKey = rk
+		hasEngineKeyMapping = true
+	case RequestKey:
+		requestKey = key
+	default:
+		return fmt.Errorf("unknown key type: %d", keyType)
 	}
 
 	redisKey := requestKey.String()
@@ -290,7 +299,7 @@ func (r *RedisIndex) Evict(ctx context.Context, engineKey BlockHash, entries []P
 
 	// Atomically check hash length and delete engine key if empty (only if engine key mapping exists)
 	if hasEngineKeyMapping {
-		if err := pruneEngineKeyScript.Run(ctx, r.RedisClient, []string{redisKey, redisEngineKey(engineKey)}).Err(); err != nil {
+		if err := pruneEngineKeyScript.Run(ctx, r.RedisClient, []string{redisKey, redisEngineKey(key)}).Err(); err != nil {
 			return fmt.Errorf("failed to check hash length and cleanup engine key: %w", err)
 		}
 	}

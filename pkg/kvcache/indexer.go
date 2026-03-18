@@ -211,12 +211,15 @@ func (k *Indexer) ScoreTokens(
 		//nolint:nilnil // no need to return an error
 		return nil, nil
 	}
+	traceLogger.Info("found tokens", "tokens", tokens, "block-keys", blockKeys)
 
 	keyToPods, err := k.kvBlockIndex.Lookup(ctx, blockKeys, sets.New(podIdentifiers...))
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("failed to query kvblock indexer: %w", err)
 	}
+	traceLogger.Info("found block keys", "block-keys", blockKeys,
+		"pods", podsPerKeyPrintHelper(keyToPods))
 
 	podScores, err := k.kvBlockScorer.Score(ctx, blockKeys, keyToPods)
 	if err != nil {

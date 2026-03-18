@@ -221,6 +221,22 @@ func (k *Indexer) ScoreTokens(
 	traceLogger.Info("found block keys", "block-keys", blockKeys,
 		"pods", podsPerKeyPrintHelper(keyToPods))
 
+	// Calculate block-level hit ratio (blocks found / blocks requested).
+	blocksFound := 0
+	for _, pods := range keyToPods {
+		if len(pods) > 0 {
+			blocksFound++
+		}
+	}
+	blockHitRatio := 0.0
+	if len(blockKeys) > 0 {
+		blockHitRatio = float64(blocksFound) / float64(len(blockKeys))
+	}
+	span.SetAttributes(
+		attribute.Float64("llm_d.kv_cache.block_hit_ratio", blockHitRatio),
+		attribute.Int("llm_d.kv_cache.blocks_found", blocksFound),
+	)
+
 	podScores, err := k.kvBlockScorer.Score(ctx, blockKeys, keyToPods)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())

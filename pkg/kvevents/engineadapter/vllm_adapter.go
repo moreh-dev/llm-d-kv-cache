@@ -118,6 +118,18 @@ func (v *VLLMAdapter) getHashAsUint64(raw any) (uint64, error) {
 	}
 }
 
+const (
+	// Expected field counts for msgpack array structs.
+	// Used for padding shorter arrays from SGLang which may omit trailing optional fields.
+	// See SGLang source: sglang/srt/disaggregation/kv_events.py (BlockStored, BlockRemoved classes)
+	blockStoredFieldCount  = 9 // tag + block_hashes + parent + tokens + block_size + lora_id + medium + lora_name + extra_keys
+	blockRemovedFieldCount = 3 // tag + block_hashes + medium
+
+	// Minimum required fields (excluding trailing optional ones).
+	blockStoredMinFields  = 5 // tag + block_hashes + parent + tokens + block_size
+	blockRemovedMinFields = 2 // tag + block_hashes
+)
+
 // vLLM msgpack-specific event structures.
 // These structs are designed for msgpack array encoding and match vLLM's format.
 type msgpackVLLMEventBatch struct {
@@ -188,10 +200,31 @@ func (v *VLLMAdapter) decodeVLLMEvent(rawEventBytes []byte) (kvevents.GenericEve
 	return converter(rawEventBytes)
 }
 
-// convertBlockStoredEvent decodes and converts a msgpack vLLM BlockStored event to a generic event.
+// convertBlockStoredEvent decodes and converts a BlockStored event to a generic event.
+// Supports both vLLM and SGLang by padding shorter arrays with nil for trailing optional fields.
+// SGLang may omit medium, lora_name, and extra_keys when they are None/default.
+// See: sglang/srt/disaggregation/kv_events.py (BlockStored class, array_like=True, omit_defaults=True)
 func (v *VLLMAdapter) convertBlockStoredEvent(rawEventBytes []byte) (kvevents.GenericEvent, error) {
+	var fields []any
+	if err := msgpack.Unmarshal(rawEventBytes, &fields); err != nil {
+		return nil, fmt.Errorf("failed to decode BlockStored event: %w", err)
+	}
+
+	if len(fields) < blockStoredMinFields {
+		return nil, fmt.Errorf("BlockStored event has too few fields: %d (minimum %d)", len(fields), blockStoredMinFields)
+	}
+
+	// Pad to full struct size so msgpack array decode succeeds.
+	for len(fields) < blockStoredFieldCount {
+		fields = append(fields, nil)
+	}
+	paddedBytes, err := msgpack.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-marshal padded BlockStored event: %w", err)
+	}
+
 	var vllmEvent msgpackVLLMBlockStoredEvent
-	if err := msgpack.Unmarshal(rawEventBytes, &vllmEvent); err != nil {
+	if err := msgpack.Unmarshal(paddedBytes, &vllmEvent); err != nil {
 		return nil, fmt.Errorf("failed to decode BlockStored event: %w", err)
 	}
 
@@ -244,10 +277,29 @@ func (v *VLLMAdapter) convertBlockStoredEvent(rawEventBytes []byte) (kvevents.Ge
 	}, nil
 }
 
-// convertBlockRemovedEvent decodes and converts a msgpack vLLM BlockRemoved event to a generic event.
+// convertBlockRemovedEvent decodes and converts a BlockRemoved event to a generic event.
+// Supports both vLLM and SGLang by padding shorter arrays with nil for trailing optional fields.
+// See: sglang/srt/disaggregation/kv_events.py (BlockRemoved class, array_like=True, omit_defaults=True)
 func (v *VLLMAdapter) convertBlockRemovedEvent(rawEventBytes []byte) (kvevents.GenericEvent, error) {
+	var fields []any
+	if err := msgpack.Unmarshal(rawEventBytes, &fields); err != nil {
+		return nil, fmt.Errorf("failed to decode BlockRemoved event: %w", err)
+	}
+
+	if len(fields) < blockRemovedMinFields {
+		return nil, fmt.Errorf("BlockRemoved event has too few fields: %d (minimum %d)", len(fields), blockRemovedMinFields)
+	}
+
+	for len(fields) < blockRemovedFieldCount {
+		fields = append(fields, nil)
+	}
+	paddedBytes, err := msgpack.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-marshal padded BlockRemoved event: %w", err)
+	}
+
 	var vllmEvent msgpackVLLMBlockRemovedEvent
-	if err := msgpack.Unmarshal(rawEventBytes, &vllmEvent); err != nil {
+	if err := msgpack.Unmarshal(paddedBytes, &vllmEvent); err != nil {
 		return nil, fmt.Errorf("failed to decode BlockRemoved event: %w", err)
 	}
 

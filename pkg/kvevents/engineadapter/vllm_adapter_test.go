@@ -178,26 +178,38 @@ func TestDecodeVLLMEvent_BlockStoredWithLora(t *testing.T) {
 	assert.Equal(t, [][]any{{"uuid-A", "salt"}, nil}, blockStored.ExtraKeys)
 }
 
-// TestDecodeVLLMEvent_BlockStoredMissingLoraName tests decoding with missing field.
+// TestDecodeVLLMEvent_BlockStoredMissingLoraName tests decoding with missing trailing fields.
+// This matches SGLang's BlockStored format which has no lora_name or extra_keys.
 func TestDecodeVLLMEvent_BlockStoredMissingLoraName(t *testing.T) {
 	adapter := NewVLLMAdapter()
 
-	vllmEvent := []any{
+	// SGLang format: 7 fields (tag + 6 data fields, no lora_name, no extra_keys)
+	sglangEvent := []any{
 		"BlockStored",
 		[]any{uint64(300), uint64(301)},
 		uint64(299),
 		[]uint32{7, 8, 9},
 		64,
-		123,
-		"gpu",
+		nil,  // lora_id
+		"GPU", // medium
 	}
 
-	rawBytes, err := msgpack.Marshal(vllmEvent)
+	rawBytes, err := msgpack.Marshal(sglangEvent)
 	require.NoError(t, err)
 
 	event, err := adapter.decodeVLLMEvent(rawBytes)
-	assert.Error(t, err)
-	assert.Nil(t, event)
+	require.NoError(t, err, "SGLang format without lora_name should decode successfully")
+	require.NotNil(t, event)
+
+	blockStored, ok := event.(*kvevents.BlockStoredEvent)
+	require.True(t, ok)
+	assert.Equal(t, []uint64{300, 301}, blockStored.BlockHashes)
+	assert.Equal(t, uint64(299), blockStored.ParentHash)
+	assert.Equal(t, []uint32{7, 8, 9}, blockStored.Tokens)
+	assert.Equal(t, "GPU", blockStored.DeviceTier)
+	assert.Nil(t, blockStored.LoraID)
+	assert.Nil(t, blockStored.LoraName, "SGLang does not send lora_name")
+	assert.Nil(t, blockStored.ExtraKeys, "SGLang does not send extra_keys")
 }
 
 // TestDecodeVLLMEvent_BlockStoredInvalidExtraKeys tests invalid extra_keys type.

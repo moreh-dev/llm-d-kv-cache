@@ -341,14 +341,20 @@ def main():
         chat_request_str = json.dumps(body)
         render_chat_result = render_chat(chat_request_str)
         print(render_chat_result)
-        render_request = {
-            "key": key,
-            "text": body["conversation"][-1]["content"],
-            "add_special_tokens": True,
-        }
-        render_request_str = json.dumps(render_request)
-        render_result = render(render_request_str)
-        print(render_result)
+        last_content = body["conversation"][-1]["content"]
+        if isinstance(last_content, str):
+            render_request = {
+                "key": key,
+                "text": last_content,
+                "add_special_tokens": True,
+            }
+            render_request_str = json.dumps(render_request)
+            render_result = render(render_request_str)
+            print(render_result)
+        else:
+            print(
+                "Skipping render(): multimodal content is not supported by CompletionRequest"
+            )
     except Exception as e:
         print(f"Error: {e}")
 

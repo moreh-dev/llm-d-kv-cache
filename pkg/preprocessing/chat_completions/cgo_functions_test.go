@@ -164,8 +164,8 @@ func TestRenderChat(t *testing.T) {
 			modelName: "ibm-granite/granite-3.3-8b-instruct",
 			template:  simpleTemplate,
 			messages: []types.Conversation{
-				{Role: "user", Content: "Hello"},
-				{Role: "assistant", Content: "Hi there!"},
+				{Role: "user", Content: types.Content{Raw: "Hello"}},
+				{Role: "assistant", Content: types.Content{Raw: "Hi there!"}},
 			},
 			expectedTokens: []uint32{0x1f0, 0x2c, 0x2ee0, 0xcb, 0x44ba, 0x2c, 0x1a7a, 0x7e1, 0x13, 0xcb},
 		},
@@ -174,9 +174,9 @@ func TestRenderChat(t *testing.T) {
 			modelName: "ibm-granite/granite-3.3-8b-instruct",
 			template:  complexTemplate,
 			messages: []types.Conversation{
-				{Role: "system", Content: "You are a helpful AI assistant."},
-				{Role: "user", Content: "What is the weather like?"},
-				{Role: "assistant", Content: "I don't have access to real-time weather data."},
+				{Role: "system", Content: types.Content{Raw: "You are a helpful AI assistant."}},
+				{Role: "user", Content: types.Content{Raw: "What is the weather like?"}},
+				{Role: "assistant", Content: types.Content{Raw: "I don't have access to real-time weather data."}},
 			},
 			expectedTokens: []uint32{
 				0x10ba, 0x374, 0x138, 0x435f, 0x4c5f, 0xb8e2, 0x20, 0x1f0, 0x2c, 0x1824,
@@ -189,8 +189,8 @@ func TestRenderChat(t *testing.T) {
 			modelName: "ibm-granite/granite-3.3-8b-instruct",
 			template:  complexTemplate,
 			messages: []types.Conversation{
-				{Role: "user", Content: "Tell me a joke"},
-				{Role: "assistant", Content: "Why don't scientists trust atoms? Because they make up everything!"},
+				{Role: "user", Content: types.Content{Raw: "Tell me a joke"}},
+				{Role: "assistant", Content: types.Content{Raw: "Why don't scientists trust atoms? Because they make up everything!"}},
 			},
 			expectedTokens: []uint32{
 				0x10ba, 0x374, 0x138, 0x435f, 0xb8e2, 0x20, 0x1f0, 0x2c, 0x788e, 0x255,
@@ -204,8 +204,8 @@ func TestRenderChat(t *testing.T) {
 			modelName: "ibm-granite/granite-3.3-8b-instruct",
 			template:  "", // use model's default template
 			messages: []types.Conversation{
-				{Role: "user", Content: "What is the capital of France?"},
-				{Role: "assistant", Content: "The capital of France is Paris."},
+				{Role: "user", Content: types.Content{Raw: "What is the capital of France?"}},
+				{Role: "assistant", Content: types.Content{Raw: "The capital of France is Paris."}},
 			},
 			// Date tokens removed since IBM Granite includes dynamic date in system prompt
 			expectedTokens: []uint32{
@@ -223,8 +223,8 @@ func TestRenderChat(t *testing.T) {
 			modelName: "microsoft/DialoGPT-medium",
 			template:  "", // use model's default template
 			messages: []types.Conversation{
-				{Role: "user", Content: "Hello, how are you?"},
-				{Role: "assistant", Content: "I'm doing well, thank you!"},
+				{Role: "user", Content: types.Content{Raw: "Hello, how are you?"}},
+				{Role: "assistant", Content: types.Content{Raw: "I'm doing well, thank you!"}},
 			},
 			expectedTokens: []uint32{
 				0x3c88, 0xb, 0x2bf, 0x185, 0x159, 0x1e, 0xc450, 0x28, 0x44d, 0x70c,
@@ -236,12 +236,12 @@ func TestRenderChat(t *testing.T) {
 			modelName: "ibm-granite/granite-3.3-8b-instruct",
 			template:  "", // use model's default template
 			messages: []preprocessing.Conversation{
-				{Role: "system", Content: "You are a helpful AI assistant specialized in coding."},
-				{Role: "user", Content: "Write a Python function to calculate fibonacci numbers."},
+				{Role: "system", Content: types.Content{Raw: "You are a helpful AI assistant specialized in coding."}},
+				{Role: "user", Content: types.Content{Raw: "Write a Python function to calculate fibonacci numbers."}},
 				{
 					Role: "assistant",
-					Content: "Here's a Python function:\ndef fibonacci(n):\n" +
-						"    return n if n <= 1 else fibonacci(n-1) + fibonacci(n-2)",
+					Content: types.Content{Raw: "Here's a Python function:\ndef fibonacci(n):\n" +
+						"    return n if n <= 1 else fibonacci(n-1) + fibonacci(n-2)"},
 				},
 			},
 			expectedTokens: []uint32{
@@ -438,8 +438,8 @@ func TestRenderChatWithDocuments(t *testing.T) {
 
 			tokens, _, err := wrapper.RenderChat(ctx, &preprocessing.RenderChatRequest{
 				Conversation: []preprocessing.Conversation{
-					{Role: "user", Content: "What is the weather in Paris?"},
-					{Role: "assistant", Content: "Let me check that for you."},
+					{Role: "user", Content: types.Content{Raw: "What is the weather in Paris?"}},
+					{Role: "assistant", Content: types.Content{Raw: "Let me check that for you."}},
 				},
 				Documents: []interface{}{
 					map[string]interface{}{
@@ -472,29 +472,29 @@ func TestLongChatCompletions(t *testing.T) {
 
 	// Create a long conversation
 	longConversation := []types.Conversation{
-		{Role: "system", Content: "You are an expert software engineer with deep knowledge of Go, Python, " +
+		{Role: "system", Content: types.Content{Raw: "You are an expert software engineer with deep knowledge of Go, Python, " +
 			"and system design. " +
-			"Provide detailed, accurate responses."},
-		{Role: "user", Content: "I'm building a high-performance caching system in Go. Can you help me design " +
-			"the architecture?"},
-		{Role: "assistant", Content: "Absolutely! For a high-performance caching system in Go, I'd recommend " +
-			"starting with a layered architecture. Let's break this down into components."},
-		{Role: "user", Content: "What about memory management and eviction policies?"},
-		{Role: "assistant", Content: "Great question! Memory management is crucial. I'd suggest implementing an " +
+			"Provide detailed, accurate responses."}},
+		{Role: "user", Content: types.Content{Raw: "I'm building a high-performance caching system in Go. Can you help me design " +
+			"the architecture?"}},
+		{Role: "assistant", Content: types.Content{Raw: "Absolutely! For a high-performance caching system in Go, I'd recommend " +
+			"starting with a layered architecture. Let's break this down into components."}},
+		{Role: "user", Content: types.Content{Raw: "What about memory management and eviction policies?"}},
+		{Role: "assistant", Content: types.Content{Raw: "Great question! Memory management is crucial. I'd suggest implementing an " +
 			"LRU (Least Recently Used) eviction policy " +
 			"with configurable memory limits. You can use a combination of a hash map for O(1) lookups and a " +
-			"doubly-linked list for tracking access order."},
-		{Role: "user", Content: "How should I handle concurrent access and thread safety?"},
-		{Role: "assistant", Content: "For thread safety, you have several options. The most common approach is " +
+			"doubly-linked list for tracking access order."}},
+		{Role: "user", Content: types.Content{Raw: "How should I handle concurrent access and thread safety?"}},
+		{Role: "assistant", Content: types.Content{Raw: "For thread safety, you have several options. The most common approach is " +
 			"to use sync.RWMutex for read-write locks, " +
 			"allowing multiple concurrent readers but exclusive writers. Alternatively, you could use sync.Map " +
 			"for simpler cases or implement a lock-free design " +
-			"with atomic operations for maximum performance."},
-		{Role: "user", Content: "What about persistence and recovery?"},
-		{Role: "assistant", Content: "For persistence, consider using a write-ahead log (WAL) pattern. This " +
+			"with atomic operations for maximum performance."}},
+		{Role: "user", Content: types.Content{Raw: "What about persistence and recovery?"}},
+		{Role: "assistant", Content: types.Content{Raw: "For persistence, consider using a write-ahead log (WAL) pattern. This " +
 			"involves logging all mutations to disk before applying them to memory. " +
 			"For recovery, you can replay the log to reconstruct the cache state. You might also want to " +
-			"implement periodic snapshots for faster recovery."},
+			"implement periodic snapshots for faster recovery."}},
 	}
 
 	modelName := "ibm-granite/granite-3.3-8b-instruct"
@@ -591,8 +591,8 @@ func BenchmarkRenderChat(b *testing.B) {
 		start := time.Now()
 		_, _, err := wrapper.RenderChat(ctx, &preprocessing.RenderChatRequest{
 			Conversation: []types.Conversation{
-				{Role: "user", Content: "Hello"},
-				{Role: "assistant", Content: "Hi there!"},
+				{Role: "user", Content: types.Content{Raw: "Hello"}},
+				{Role: "assistant", Content: types.Content{Raw: "Hi there!"}},
 			},
 		})
 		require.NoError(b, err, "Benchmark should not return errors")
@@ -686,8 +686,8 @@ func TestLocalTokenizer(t *testing.T) {
 	t.Run("RenderChat", func(t *testing.T) {
 		tokens, offset, err := wrapper.RenderChat(context.Background(), &preprocessing.RenderChatRequest{
 			Conversation: []preprocessing.Conversation{
-				{Role: "user", Content: "Hello from local tokenizer!"},
-				{Role: "assistant", Content: "Hi! I'm using a locally loaded template."},
+				{Role: "user", Content: types.Content{Raw: "Hello from local tokenizer!"}},
+				{Role: "assistant", Content: types.Content{Raw: "Hi! I'm using a locally loaded template."}},
 			},
 		})
 		require.NoError(t, err, "RenderChat should not return an error")

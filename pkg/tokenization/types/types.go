@@ -16,12 +16,87 @@ limitations under the License.
 
 package types
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+)
 
 // Conversation represents a single message in a conversation.
 type Conversation struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	// Role is the message Role, optional values are 'user', 'assistant', ...
+	Role string `json:"role,omitempty"`
+	// Content defines text of this message
+	Content Content `json:"content,omitempty"`
+}
+
+type Content struct {
+	Raw        string
+	Structured []ContentBlock
+}
+
+type ContentBlock struct {
+	Type       string     `json:"type"`
+	Text       string     `json:"text,omitempty"`
+	ImageURL   ImageBlock `json:"image_url,omitempty"`
+	InputAudio AudioBlock `json:"input_audio,omitempty"`
+	VideoURL   VideoBlock `json:"video_url,omitempty"`
+}
+
+type ImageBlock struct {
+	Url string `json:"url,omitempty"`
+}
+
+type AudioBlock struct {
+	Data   string `json:"data,omitempty"`
+	Format string `json:"format,omitempty"`
+}
+
+type VideoBlock struct {
+	Url string `json:"url,omitempty"`
+}
+
+// UnmarshalJSON allow use both format.
+func (mc *Content) UnmarshalJSON(data []byte) error {
+	// Raw format
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		mc.Raw = str
+		return nil
+	}
+
+	// Block format
+	var blocks []ContentBlock
+	if err := json.Unmarshal(data, &blocks); err == nil {
+		mc.Structured = blocks
+		return nil
+	}
+
+	return errors.New("content format not supported")
+}
+
+func (mc Content) MarshalJSON() ([]byte, error) {
+	if mc.Raw != "" {
+		return json.Marshal(mc.Raw)
+	}
+	if mc.Structured != nil {
+		return json.Marshal(mc.Structured)
+	}
+	return json.Marshal("")
+}
+
+func (mc Content) PlainText() string {
+	if mc.Raw != "" {
+		return mc.Raw
+	}
+	var sb strings.Builder
+	for _, block := range mc.Structured {
+		if block.Type == "text" {
+			sb.WriteString(block.Text)
+			sb.WriteString(" ")
+		}
+	}
+	return sb.String()
 }
 
 // RenderChatRequest represents the request to render a chat template.

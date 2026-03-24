@@ -27,11 +27,24 @@ type ImageBlock struct {
 	URL string `json:"url,omitempty"`
 }
 
+// AudioBlock represents the input_audio field in a multimodal content block.
+type AudioBlock struct {
+	Data   string `json:"data,omitempty"`
+	Format string `json:"format,omitempty"`
+}
+
+// VideoBlock represents the video_url field in a multimodal content block.
+type VideoBlock struct {
+	URL string `json:"url,omitempty"`
+}
+
 // ContentBlock represents a single part of a multimodal message.
 type ContentBlock struct {
-	Type     string     `json:"type"`
-	Text     string     `json:"text,omitempty"`
-	ImageURL ImageBlock `json:"image_url,omitempty"`
+	Type       string     `json:"type"`
+	Text       string     `json:"text,omitempty"`
+	ImageURL   ImageBlock `json:"image_url,omitempty"`
+	InputAudio AudioBlock `json:"input_audio,omitempty"`
+	VideoURL   VideoBlock `json:"video_url,omitempty"`
 }
 
 // Content holds a message's content — either plain text or a list of multimodal blocks.

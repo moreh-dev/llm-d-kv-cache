@@ -130,7 +130,9 @@ func (k *Indexer) KVBlockIndex() kvblock.Index {
 // relevant.
 //
 // The function returns a map of pod identifiers to scores.
-func (k *Indexer) GetPodScores(ctx context.Context, renderReq *types.RenderChatRequest, prompt, modelName string,
+func (k *Indexer) GetPodScores(ctx context.Context, renderReq *types.RenderChatRequest,
+	renderResponsesReq *types.RenderResponsesRequest,
+	prompt, modelName string,
 	podIdentifiers []string,
 ) (map[string]float64, error) {
 	// Start tracing span for main operation
@@ -149,7 +151,15 @@ func (k *Indexer) GetPodScores(ctx context.Context, renderReq *types.RenderChatR
 	traceLogger := log.FromContext(ctx).V(logging.TRACE).WithName("kvcache.GetPodScores")
 
 	// 1. tokenize prompt
-	tokens := k.tokenizersPool.Tokenize(renderReq, prompt)
+	var tokens []uint32
+	switch {
+	case renderResponsesReq != nil:
+		tokens = k.tokenizersPool.TokenizeResponses(renderResponsesReq)
+	case renderReq != nil:
+		tokens = k.tokenizersPool.Tokenize(renderReq, "")
+	default:
+		tokens = k.tokenizersPool.Tokenize(nil, prompt)
+	}
 
 	// 2. Truncate prompt (if set in the request)
 	if renderReq != nil && renderReq.TruncatePromptTokens != nil {

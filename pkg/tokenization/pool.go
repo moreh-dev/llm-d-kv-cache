@@ -37,10 +37,11 @@ type tokenizationResponse struct {
 
 // Task represents a unit of work for tokenizing a prompt.
 type Task struct {
-	RenderReq *types.RenderChatRequest
-	Prompt    string
-	ModelName string
-	ResultCh  chan<- tokenizationResponse // nil => fire-and-forget
+	RenderReq          *types.RenderChatRequest
+	RenderResponsesReq *types.RenderResponsesRequest
+	Prompt             string
+	ModelName          string
+	ResultCh           chan<- tokenizationResponse // nil => fire-and-forget
 }
 
 // Pool encapsulates the queue and worker pool for tokenization tasks.
@@ -73,6 +74,19 @@ func (pool *Pool) Tokenize(renderReq *types.RenderChatRequest, prompt string) []
 		RenderReq: renderReq,
 		Prompt:    prompt,
 		ResultCh:  resultCh,
+	})
+
+	res := <-resultCh
+	tokens := res.Tokens
+	return tokens
+}
+
+// TokenizeResponses queues a Responses API tokenization task and blocks until the result is available.
+func (pool *Pool) TokenizeResponses(renderResponsesReq *types.RenderResponsesRequest) []uint32 {
+	resultCh := make(chan tokenizationResponse, 1)
+	pool.queue.Add(Task{
+		RenderResponsesReq: renderResponsesReq,
+		ResultCh:           resultCh,
 	})
 
 	res := <-resultCh
@@ -132,16 +146,23 @@ func (pool *Pool) workerLoop(_ int) {
 func (pool *Pool) processTask(task Task) error {
 	var tokens []uint32
 	var err error
-	if task.RenderReq == nil {
-		tokens, _, err = pool.tokenizer.Render(task.Prompt)
+	switch {
+	case task.RenderResponsesReq != nil:
+		tokens, _, err = pool.tokenizer.RenderResponses(task.RenderResponsesReq)
 		if err != nil {
-			log.Log.Error(err, "failed to render tokens", "prompt", task.Prompt)
+			log.Log.Error(err, "failed to render responses tokens", "task", task.RenderResponsesReq)
 			return err
 		}
-	} else {
+	case task.RenderReq != nil:
 		tokens, _, err = pool.tokenizer.RenderChat(task.RenderReq)
 		if err != nil {
 			log.Log.Error(err, "failed to render tokens", "task", task.RenderReq)
+			return err
+		}
+	default:
+		tokens, _, err = pool.tokenizer.Render(task.Prompt)
+		if err != nil {
+			log.Log.Error(err, "failed to render tokens", "prompt", task.Prompt)
 			return err
 		}
 	}

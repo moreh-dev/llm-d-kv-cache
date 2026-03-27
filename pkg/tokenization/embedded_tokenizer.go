@@ -389,6 +389,20 @@ func (t *CachedTokenizer) Render(prompt string) ([]uint32, []types.Offset, error
 	return tokens, offsets, nil
 }
 
+// RenderResponses renders a Responses API request and returns token IDs with offset mappings.
+func (t *CachedTokenizer) RenderResponses(
+	req *types.RenderResponsesRequest,
+) ([]uint32, []types.Offset, error) {
+	ctx := context.TODO()
+
+	tokens, offsets, err := t.chatTemplateRenderer.RenderResponses(ctx, req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to render responses: %w", err)
+	}
+
+	return tokens, offsets, nil
+}
+
 func (t *CachedTokenizer) Type() string {
 	return "cached"
 }
@@ -461,6 +475,30 @@ func (c *CompositeTokenizer) Render(prompt string,
 	for _, tokenizer := range c.Tokenizers {
 		start := time.Now()
 		ids, offsets, err := tokenizer.Render(prompt)
+		metrics.TokenizationLatency.WithLabelValues(tokenizer.Type()).Observe(time.Since(start).Seconds())
+		if err != nil {
+			rErr = multierr.Append(rErr, err)
+			continue
+		}
+		metrics.TokenizedTokensCount.WithLabelValues(tokenizer.Type()).Add(float64(len(ids)))
+		return ids, offsets, nil
+	}
+	return nil, nil, rErr
+}
+
+// RenderResponses renders a Responses API request with fallback across tokenizers.
+func (c *CompositeTokenizer) RenderResponses(
+	req *types.RenderResponsesRequest,
+) ([]uint32, []types.Offset, error) {
+	var rErr error
+	for _, tokenizer := range c.Tokenizers {
+		copiedReq, err := req.DeepCopy()
+		if err != nil {
+			rErr = multierr.Append(rErr, fmt.Errorf("failed to copy responses render request: %w", err))
+			continue
+		}
+		start := time.Now()
+		ids, offsets, err := tokenizer.RenderResponses(copiedReq)
 		metrics.TokenizationLatency.WithLabelValues(tokenizer.Type()).Observe(time.Since(start).Seconds())
 		if err != nil {
 			rErr = multierr.Append(rErr, err)

@@ -52,6 +52,7 @@ extern PyObject* g_chat_template_module;
 extern PyObject* g_init_app_func;
 extern PyObject* g_render_chat_func;
 extern PyObject* g_render_func;
+extern PyObject* g_render_responses_func;
 
 // Initialize the cached module and functions (call once at startup)
 int Py_InitChatTemplateModule();
@@ -70,6 +71,12 @@ char* Py_CallRender(const char* json_request);
 
 // Internal function that does the actual work
 char* Py_CallRenderInternal(const char* json_request);
+
+// Call the cached render_responses function
+char* Py_CallRenderResponses(const char* json_request);
+
+// Internal function that does the actual work
+char* Py_CallRenderResponsesInternal(const char* json_request);
 
 // Clear all caches for testing purposes
 char* Py_ClearCaches(void);

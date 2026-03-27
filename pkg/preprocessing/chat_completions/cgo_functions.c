@@ -23,6 +23,7 @@ PyObject* g_chat_template_module = NULL;
 PyObject* g_init_app_func = NULL;
 PyObject* g_render_chat_func = NULL;
 PyObject* g_render_func = NULL;
+PyObject* g_render_responses_func = NULL;
 int g_initialized = 0;
 int g_python_initialized = 0;
 
@@ -113,6 +114,10 @@ void Py_FinalizeGo() {
     if (g_render_func) {
         Py_DECREF(g_render_func);
         g_render_func = NULL;
+    }
+    if (g_render_responses_func) {
+        Py_DECREF(g_render_responses_func);
+        g_render_responses_func = NULL;
     }
     if (g_chat_template_module) {
         Py_DECREF(g_chat_template_module);
@@ -234,6 +239,16 @@ int Py_InitChatTemplateModule() {
         return -1;
     }
     Py_INCREF(g_render_func);  // Keep a reference
+
+    // Get the render_responses function
+    g_render_responses_func = PyDict_GetItemString(module_dict, "render_responses");
+    if (!g_render_responses_func || !PyCallable_Check(g_render_responses_func)) {
+        printf("[C] Py_InitChatTemplateModule ERROR - render_responses function not found or not callable\n");
+        PyGILState_Release(gil_state);
+        PyThread_release_lock(g_init_lock);
+        return -1;
+    }
+    Py_INCREF(g_render_responses_func);  // Keep a reference
 
     // Release GIL
     PyGILState_Release(gil_state);
@@ -471,6 +486,88 @@ char* Py_CallRenderInternal(const char* json_request) {
     return cresult;
 }
 
+// Call the cached render_responses function
+char* Py_CallRenderResponses(const char* json_request) {
+    // Try direct call first (fast path)
+    char* result = Py_CallRenderResponsesInternal(json_request);
+    if (result != NULL) {
+        return result;  // Success on first try
+    }
+
+    // If failed, just return NULL (no retry, no reload)
+    return NULL;
+}
+
+// Internal function that does the actual work
+char* Py_CallRenderResponsesInternal(const char* json_request) {
+    // Check if Python interpreter is still valid
+    if (!Py_IsInitialized()) {
+        printf("[C] Py_CallRenderResponsesInternal ERROR - Python interpreter not initialized\n");
+        fflush(stdout);
+        return NULL;
+    }
+
+    // Simple validation
+    if (!json_request) {
+        printf("[C] Py_CallRenderResponsesInternal ERROR - Input is NULL\n");
+        fflush(stdout);
+        return NULL;
+    }
+
+    // Acquire GIL for Python operations
+    PyGILState_STATE gil_state = PyGILState_Ensure();
+    // Create Python string from JSON request
+    PyObject* py_json = PyUnicode_FromString(json_request);
+    if (!py_json) {
+        printf("[C] Py_CallRenderResponsesInternal ERROR - Failed to create Python string\n");
+        fflush(stdout);
+        PyGILState_Release(gil_state);
+        return NULL;
+    }
+
+    // Create arguments tuple
+    PyObject* args = PyTuple_Pack(1, py_json);
+    if (!args) {
+        printf("[C] Py_CallRenderResponsesInternal ERROR - Failed to create args tuple\n");
+        fflush(stdout);
+        Py_DECREF(py_json);
+        PyGILState_Release(gil_state);
+        return NULL;
+    }
+
+    // Call the cached function
+    PyObject* py_result = PyObject_CallObject(g_render_responses_func, args);
+
+    // Clean up args
+    Py_DECREF(args);
+    Py_DECREF(py_json);
+
+    char* cresult = NULL;
+    if (py_result) {
+        // Convert to C string
+        const char* s = PyUnicode_AsUTF8(py_result);
+        if (s) {
+            cresult = strdup(s);
+        }
+        else {
+            printf("[C] Py_CallRenderResponsesInternal ERROR - Failed to convert result to C string\n");
+            fflush(stdout);
+        }
+        Py_DECREF(py_result);
+    }
+    else {
+        printf("[C] Py_CallRenderResponsesInternal ERROR - Python function returned NULL\n");
+        fflush(stdout);
+        PyErr_Print();
+        fflush(stderr);
+    }
+
+    // Release GIL
+    PyGILState_Release(gil_state);
+
+    return cresult;
+}
+
 // Clear all caches for testing purposes
 char* Py_ClearCaches() {
     if (!g_initialized) {
@@ -519,10 +616,12 @@ void Py_CleanupChatTemplateModule() {
         Py_XDECREF(g_init_app_func);
         Py_XDECREF(g_render_chat_func);
         Py_XDECREF(g_render_func);
+        Py_XDECREF(g_render_responses_func);
         Py_XDECREF(g_chat_template_module);
         g_init_app_func = NULL;
         g_render_chat_func = NULL;
         g_render_func = NULL;
+        g_render_responses_func = NULL;
         g_chat_template_module = NULL;
         g_initialized = 0;
         PyGILState_Release(state);
@@ -548,6 +647,10 @@ int Py_ReinitializeGo() {
     if (g_render_func) {
         Py_DECREF(g_render_func);
         g_render_func = NULL;
+    }
+    if (g_render_responses_func) {
+        Py_DECREF(g_render_responses_func);
+        g_render_responses_func = NULL;
     }
     if (g_chat_template_module) {
         Py_DECREF(g_chat_template_module);

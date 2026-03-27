@@ -118,6 +118,13 @@ type RenderRequest struct {
 	AddSpecialTokens bool   `json:"add_special_tokens,omitempty"`
 }
 
+// RenderResponsesRequest represents the request to render a Responses API input.
+type RenderResponsesRequest struct {
+	Input        any `json:"input"`
+	Instructions any `json:"instructions,omitempty"`
+	Tools        any `json:"tools,omitempty"`
+}
+
 // Offset represents a character offset range with [start, end] indices.
 type Offset [2]uint
 
@@ -147,6 +154,20 @@ func (req *RenderRequest) DeepCopy() (*RenderRequest, error) {
 		return nil, err
 	}
 	var out RenderRequest
+	err = json.Unmarshal(b, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeepCopy creates a deep copy of the RenderResponsesRequest.
+func (req *RenderResponsesRequest) DeepCopy() (*RenderResponsesRequest, error) {
+	b, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	var out RenderResponsesRequest
 	err = json.Unmarshal(b, &out)
 	if err != nil {
 		return nil, err

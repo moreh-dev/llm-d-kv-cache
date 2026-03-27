@@ -24,5 +24,6 @@ import (
 type Tokenizer interface {
 	RenderChat(*types.RenderChatRequest) ([]uint32, []types.Offset, error)
 	Render(string) ([]uint32, []types.Offset, error)
+	RenderResponses(*types.RenderResponsesRequest) ([]uint32, []types.Offset, error)
 	Type() string
 }

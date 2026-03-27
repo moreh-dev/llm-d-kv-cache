@@ -49,11 +49,12 @@ type InitAppRequest struct {
 
 // Type aliases for backward compatibility - these types are now defined in tokenization/types.
 type (
-	Conversation      = types.Conversation
-	RenderChatRequest = types.RenderChatRequest
-	RenderRequest     = types.RenderRequest
-	Offset            = types.Offset
-	RenderResponse    = types.RenderResponse
+	Conversation            = types.Conversation
+	RenderChatRequest       = types.RenderChatRequest
+	RenderRequest           = types.RenderRequest
+	RenderResponsesRequest  = types.RenderResponsesRequest
+	Offset                  = types.Offset
+	RenderResponse          = types.RenderResponse
 )
 
 // ChatTemplatingProcessor is a processor that handles chat template rendering
@@ -182,6 +183,45 @@ func (w *ChatTemplatingProcessor) Render(
 	if cResult == nil {
 		traceLogger.Error(nil, "C function returned nil")
 		return nil, nil, fmt.Errorf("python render failed")
+	}
+	defer C.free(unsafe.Pointer(cResult))
+	resultJSON := C.GoString(cResult)
+
+	// Parse the response
+	var response RenderResponse
+	err = json.Unmarshal([]byte(resultJSON), &response)
+	if err != nil {
+		traceLogger.Error(err, "Failed to unmarshal response")
+		return nil, nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return response.TokenIDs, response.OffsetMappings, nil
+}
+
+// RenderResponses renders a Responses API request by calling Py_CallRenderResponses, which invokes
+// the Python render_responses wrapper. Returns token IDs and offset mappings from the JSON response.
+func (w *ChatTemplatingProcessor) RenderResponses(ctx context.Context,
+	req *RenderResponsesRequest,
+) ([]uint32, []Offset, error) {
+	traceLogger := log.FromContext(ctx).V(logging.TRACE).WithName("renderResponses")
+
+	if req == nil {
+		traceLogger.Error(nil, "Received nil request")
+		return nil, nil, fmt.Errorf("received nil request")
+	}
+
+	reqJSON, err := json.Marshal(req)
+	if err != nil {
+		traceLogger.Error(err, "Failed to marshal request")
+		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	// Call the cached Python function
+	cJSONString := C.CString(string(reqJSON))
+	defer C.free(unsafe.Pointer(cJSONString))
+	cResult := C.Py_CallRenderResponses(cJSONString)
+	if cResult == nil {
+		traceLogger.Error(nil, "C function returned nil")
+		return nil, nil, fmt.Errorf("python render_responses failed")
 	}
 	defer C.free(unsafe.Pointer(cResult))
 	resultJSON := C.GoString(cResult)

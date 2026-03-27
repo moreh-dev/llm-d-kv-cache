@@ -76,6 +76,27 @@ func (m *MockTokenizer) Render(prompt string) ([]uint32, []types.Offset, error) 
 	return tokens, offsets, args.Error(2)
 }
 
+func (m *MockTokenizer) RenderResponses(req *types.RenderResponsesRequest) ([]uint32, []types.Offset, error) {
+	args := m.Called(req)
+	tokenIface := args.Get(0)
+	if tokenIface == nil {
+		return nil, nil, args.Error(2)
+	}
+	tokens, ok := tokenIface.([]uint32)
+	if !ok {
+		panic("MockTokenizer.RenderResponses: expected []uint32 from mock, got unexpected type")
+	}
+	offsetIface := args.Get(1)
+	if offsetIface == nil {
+		return nil, nil, args.Error(2)
+	}
+	offsets, ok := offsetIface.([]types.Offset)
+	if !ok {
+		panic("MockTokenizer.RenderResponses: expected []types.Offset from mock, got unexpected type")
+	}
+	return tokens, offsets, args.Error(2)
+}
+
 func (m *MockTokenizer) Close() error {
 	return nil
 }

@@ -10,6 +10,9 @@ NAMESPACE ?= hc4ai-operator
 VLLM_VERSION := 0.15.0
 # Set to 1 to build vLLM from source (required if pre-built wheels don't work on your CPU)
 VLLM_BUILD_FROM_SOURCE ?= 0
+# Custom vLLM repo and branch (when VLLM_BRANCH is set, source build is forced)
+VLLM_REPO ?= https://github.com/moreh-dev/vllm.git
+VLLM_BRANCH ?= response-render-0150
 
 TARGETOS ?= $(shell go env GOOS)
 TARGETARCH ?= $(shell go env GOARCH)
@@ -124,9 +127,14 @@ install-python-deps: setup-venv ## installs dependencies.
 		exit 0; \
 	fi; \
 	echo "Installing vllm..."; \
+	if [ -n "$(VLLM_BRANCH)" ]; then \
+		echo "Building vLLM from source (custom branch: $(VLLM_BRANCH) from $(VLLM_REPO))..."; \
+		PATH=$(VENV_BIN):$$PATH VLLM_REPO=$(VLLM_REPO) VLLM_BRANCH=$(VLLM_BRANCH) ./pkg/preprocessing/chat_completions/setup.sh; \
+		exit 0; \
+	fi; \
 	if [ "$(VLLM_BUILD_FROM_SOURCE)" = "1" ]; then \
 		echo "Building vLLM from source (VLLM_BUILD_FROM_SOURCE=1)..."; \
-		PATH=$(VENV_BIN):$$PATH VLLM_TAG=v$(VLLM_VERSION) ./pkg/preprocessing/chat_completions/setup.sh; \
+		PATH=$(VENV_BIN):$$PATH VLLM_REPO=$(VLLM_REPO) VLLM_TAG=v$(VLLM_VERSION) ./pkg/preprocessing/chat_completions/setup.sh; \
 		exit 0; \
 	fi; \
 	if [ "$(TARGETOS)" = "linux" ]; then \
@@ -138,11 +146,11 @@ install-python-deps: setup-venv ## installs dependencies.
 			$(VENV_BIN)/pip install https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}+cpu-cp38-abi3-manylinux_2_35_aarch64.whl; \
 		else \
 			echo "Unsupported Linux architecture: $(TARGETARCH). Falling back to setup.sh..."; \
-			PATH=$(VENV_BIN):$$PATH VLLM_TAG=v$(VLLM_VERSION) ./pkg/preprocessing/chat_completions/setup.sh; \
+			PATH=$(VENV_BIN):$$PATH VLLM_REPO=$(VLLM_REPO) VLLM_TAG=v$(VLLM_VERSION) ./pkg/preprocessing/chat_completions/setup.sh; \
 		fi; \
 	elif [ "$(TARGETOS)" = "darwin" ]; then \
 		echo "Building vLLM from source for macOS (pre-built wheels not available)..."; \
-		PATH=$(VENV_BIN):$$PATH VLLM_TAG=v$(VLLM_VERSION) ./pkg/preprocessing/chat_completions/setup.sh; \
+		PATH=$(VENV_BIN):$$PATH VLLM_REPO=$(VLLM_REPO) VLLM_TAG=v$(VLLM_VERSION) ./pkg/preprocessing/chat_completions/setup.sh; \
 	else \
 		echo "Unsupported OS: $(TARGETOS)"; \
 		exit 1; \

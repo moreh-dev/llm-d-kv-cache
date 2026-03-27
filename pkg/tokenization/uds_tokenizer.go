@@ -272,6 +272,13 @@ func (u *UdsTokenizer) RenderChat(
 	return u.Encode(resp.RenderedPrompt, false)
 }
 
+// RenderResponses is not supported by the UDS tokenizer service.
+func (u *UdsTokenizer) RenderResponses(
+	_ *types.RenderResponsesRequest,
+) ([]uint32, []types.Offset, error) {
+	return nil, nil, fmt.Errorf("RenderResponses is not supported by UDS tokenizer")
+}
+
 // ConvertToProtoValue converts a Go interface{} value to a protobuf Value.
 // It handles common types including strings, numbers, booleans, slices, and maps.
 // Unrecognized types are converted to string representation.

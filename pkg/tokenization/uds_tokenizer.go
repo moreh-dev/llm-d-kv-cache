@@ -367,6 +367,13 @@ func (u *UdsTokenizer) RenderChat(
 	return resp.TokenIds, features, nil
 }
 
+// RenderResponses is not supported by the UDS tokenizer service.
+func (u *UdsTokenizer) RenderResponses(
+	_ *types.RenderResponsesRequest,
+) ([]uint32, []types.Offset, error) {
+	return nil, nil, fmt.Errorf("RenderResponses is not supported by UDS tokenizer")
+}
+
 // convertProtoFeatures converts proto MultiModalFeatures to domain type.
 func convertProtoFeatures(pf *tokenizerpb.MultiModalFeatures) *MultiModalFeatures {
 	if pf == nil {

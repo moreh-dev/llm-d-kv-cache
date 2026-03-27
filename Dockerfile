@@ -16,6 +16,8 @@ FROM python:3.12-slim AS python-builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
+ARG VLLM_REPO=https://github.com/moreh-dev/vllm.git
+ARG VLLM_BRANCH=response-render-0150
 
 WORKDIR /workspace
 
@@ -23,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 
 COPY Makefile Makefile
 COPY pkg/preprocessing/chat_completions/ pkg/preprocessing/chat_completions/
-RUN TARGETOS=${TARGETOS} TARGETARCH=${TARGETARCH} make install-python-deps
+RUN VLLM_REPO=${VLLM_REPO} VLLM_BRANCH=${VLLM_BRANCH} TARGETOS=${TARGETOS} TARGETARCH=${TARGETARCH} make install-python-deps
 
 # Build Stage: using Go 1.24.1 image
 FROM quay.io/projectquay/golang:1.24 AS builder

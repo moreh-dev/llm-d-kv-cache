@@ -13,9 +13,11 @@ fi
 # 2. Architecture check (Only Intel/AMD x86, ARM AArch64, Apple Silicon supported)
 ARCH=$(uname -m)
 OS=$(uname)
-VLLM_REPO=https://github.com/vllm-project/vllm.git
+VLLM_REPO=${VLLM_REPO:-https://github.com/vllm-project/vllm.git}
 # VLLM_TAG can be passed from Makefile, defaults to v0.15.0
 VLLM_TAG=${VLLM_TAG:-v0.15.0}
+# VLLM_BRANCH can be passed from Makefile to checkout a branch instead of a tag
+VLLM_BRANCH=${VLLM_BRANCH:-}
 
 if [[ "$ARCH" == "x86_64" ]]; then
     ARCH_TYPE="x86_64"
@@ -106,8 +108,13 @@ if [ ! -d "$VLLM_SRC_DIR" ]; then
     git clone $VLLM_REPO "$VLLM_SRC_DIR"
 fi
 cd "$VLLM_SRC_DIR"
-git fetch --tags
-git checkout tags/$VLLM_TAG
+if [ -n "$VLLM_BRANCH" ]; then
+    git fetch origin "$VLLM_BRANCH"
+    git checkout "$VLLM_BRANCH"
+else
+    git fetch --tags
+    git checkout tags/$VLLM_TAG
+fi
 
 $PYTHON_BIN -m pip install -v -r requirements/cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
 

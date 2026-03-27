@@ -60,6 +60,14 @@ func (d *DummyTokenizer) RenderChatTemplate(_ string, _ []byte) (string, error) 
 	return "rendered template", nil
 }
 
+func (d *DummyTokenizer) RenderResponses(_ *types.RenderResponsesRequest,
+) ([]uint32, []types.Offset, error) {
+	if d.returnError {
+		return nil, nil, fmt.Errorf("dummy tokenizer error")
+	}
+	return []uint32{1, 2, 3}, []types.Offset{{0, 1}, {2, 3}, {4, 5}}, nil
+}
+
 func (d *DummyTokenizer) Close() error {
 	return nil
 }

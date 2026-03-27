@@ -24,6 +24,7 @@ import sys
 
 from vllm.entrypoints.openai.completion.protocol import CompletionRequest
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
+from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
 from vllm.entrypoints.openai.engine.protocol import ErrorResponse
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.openai.cli_args import make_arg_parser
@@ -237,19 +238,12 @@ def render_chat(request_json):
             )
         )
         if isinstance(result, ErrorResponse):
-            raise RuntimeError(f"Chat template error: {result.error.message}")
-        # result is tuple of (conversation, engine_prompts)
-        # engine_prompts[0] contains prompt_token_ids
+            raise RuntimeError(f"Render error: {result.error.message}")
         _, engine_prompts = result
-        if not engine_prompts or len(engine_prompts) == 0:
+        if not engine_prompts:
             raise RuntimeError("render_chat_request returned empty engine_prompts")
-        # Convert to match docstring format
-        return json.dumps(
-            {
-                "input_ids": engine_prompts[0].get("prompt_token_ids", []),
-                "offset_mapping": [],
-            }
-        )
+        token_ids = engine_prompts[0]["prompt_token_ids"]
+        return json.dumps({"input_ids": list(token_ids), "offset_mapping": []})
 
     except Exception as e:
         raise RuntimeError(
@@ -292,23 +286,69 @@ def render(request_json: str) -> str:
             )
         )
         if isinstance(result, ErrorResponse):
-            raise RuntimeError(f"Completion render error: {result.error.message}")
-        # result is list of dicts with prompt_token_ids
-        if not result or len(result) == 0:
-            raise RuntimeError("render_completion_request returned empty result")
-        # Convert to match docstring format
-        return json.dumps(
-            {
-                "input_ids": result[0].get("prompt_token_ids", []),
-                "offset_mapping": [],
-            }
-        )
+            raise RuntimeError(f"Render error: {result.error.message}")
+        if isinstance(result, list):
+            if not result:
+                raise RuntimeError("render_completion_request returned empty list")
+            result = result[0]
+        token_ids = result["prompt_token_ids"]
+        return json.dumps({"input_ids": list(token_ids), "offset_mapping": []})
 
     except Exception as e:
         raise RuntimeError(f"Error rendering text ({type(e).__name__}): {e}") from e
 
 
-# python pkg/preprocessing/chat_completions/tokenizer_wrapper.py True '{"model": "/mnt/models/hub/models--ibm-granite--granite-3.3-8b-instruct/snapshots/51dd4bc2ade4059a6bd87649d68aa11e4fb2529b", "conversation": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "who are you?"}]}'
+def render_responses(request_json: str) -> str:
+    """
+    Render a Responses API request using vLLM's OpenAIServingRender.
+
+    Args:
+        request_json (str): JSON string containing ResponsesRequest fields:
+            - key (str): The tokenizer cache key
+            - input (str or list): The input content
+            - instructions (str, optional): System-level instructions
+            - tools (list, optional): Tool definitions
+
+    Returns:
+        JSON string containing:
+            - input_ids (list of int): The list of token IDs.
+            - offset_mapping (list): Always empty.
+    """
+    try:
+        request = json.loads(request_json)
+        key = request.pop("key")
+        app = _app_cache.get(key)
+        if app is None:
+            raise RuntimeError(f"App with key {key} not found in cache")
+
+        # Remove model since it's already set in the app state
+        request.pop("model", None)
+
+        result = _run_async(
+            app.state.openai_serving_responses.render_responses_request(
+                ResponsesRequest(**request)
+            )
+        )
+        if isinstance(result, ErrorResponse):
+            raise RuntimeError(f"Render error: {result.error.message}")
+        _, engine_prompts = result
+        if not engine_prompts:
+            raise RuntimeError("render_responses_request returned empty engine_prompts")
+        token_ids = engine_prompts[0]["prompt_token_ids"]
+        return json.dumps({"input_ids": list(token_ids), "offset_mapping": []})
+
+    except Exception as e:
+        raise RuntimeError(
+            f"Error rendering responses ({type(e).__name__}): {e}"
+        ) from e
+
+
+# Usage:
+#   Chat Completions (default):
+#     python tokenizer_wrapper.py True '{"model": "...", "conversation": [{"role": "user", "content": "hello"}]}'
+#   Responses API:
+#     python tokenizer_wrapper.py True '{"model": "...", "input": "hello"}' responses
+#     python tokenizer_wrapper.py True '{"model": "...", "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]}' responses
 def main():
     """Example usage and testing function."""
     is_local = False
@@ -338,23 +378,34 @@ def main():
             )
         )
         body["key"] = key
-        chat_request_str = json.dumps(body)
-        render_chat_result = render_chat(chat_request_str)
-        print(render_chat_result)
-        last_content = body["conversation"][-1]["content"]
-        if isinstance(last_content, str):
-            render_request = {
-                "key": key,
-                "text": last_content,
-                "add_special_tokens": True,
-            }
-            render_request_str = json.dumps(render_request)
-            render_result = render(render_request_str)
-            print(render_result)
-        else:
-            print(
-                "Skipping render(): multimodal content is not supported by CompletionRequest"
-            )
+
+        # Chat Completions
+        if "conversation" in body or "messages" in body:
+            chat_request_str = json.dumps(body)
+            render_chat_result = render_chat(chat_request_str)
+            print(f"[render_chat] {render_chat_result}")
+            msgs = body.get("conversation") or body.get("messages", [])
+            last_content = msgs[-1]["content"] if msgs else ""
+            if isinstance(last_content, str):
+                render_request = {
+                    "key": key,
+                    "text": last_content,
+                    "add_special_tokens": True,
+                }
+                render_request_str = json.dumps(render_request)
+                render_result = render(render_request_str)
+                print(f"[render] {render_result}")
+            else:
+                print(
+                    "Skipping render(): multimodal content is not supported by CompletionRequest"
+                )
+
+        # Responses API
+        if "input" in body:
+            responses_request_str = json.dumps(body)
+            result = render_responses(responses_request_str)
+            print(f"[render_responses] {result}")
+
     except Exception as e:
         print(f"Error: {e}")
 

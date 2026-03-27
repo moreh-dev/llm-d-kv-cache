@@ -445,7 +445,7 @@ func (s *UDSTokenizerSuite) TestGoldenScoring() {
 	fakePodList := []string{s.Pod1IP}
 	s.addEntriesToIndex(engineKeys, requestKeys, fakePodList)
 
-	pods, err := s.indexer.GetPodScores(s.T().Context(), nil, goldenPrompt, nil, defaultModelName, fakePodList)
+	pods, err := s.indexer.GetPodScores(s.T().Context(), nil, nil, goldenPrompt, nil, defaultModelName, fakePodList)
 	s.Require().NoError(err)
 	s.Require().Contains(pods, s.Pod1IP, "expected pod in scores")
 
@@ -472,7 +472,7 @@ func (s *UDSTokenizerSuite) TestCacheHit() {
 	engineKeys, requestKeys := s.promptToEngineAndRequestKeys(tokens)
 	s.addEntriesToIndex(engineKeys, requestKeys, fakePodList)
 
-	pods, err := s.indexer.GetPodScores(s.T().Context(), nil, prompt, nil, defaultModelName, fakePodList)
+	pods, err := s.indexer.GetPodScores(s.T().Context(), nil, nil, prompt, nil, defaultModelName, fakePodList)
 	s.Require().NoError(err)
 	s.T().Logf("Received pod scores: %+v", pods)
 	s.Len(pods, len(fakePodList), "expected pod scores length to match candidate pods")
@@ -485,7 +485,7 @@ func (s *UDSTokenizerSuite) TestCacheMiss() {
 	prompt := "What is the capital of France?"
 	fakePodList := []string{s.Pod1IP}
 
-	pods, err := s.indexer.GetPodScores(s.T().Context(), nil, prompt, nil, defaultModelName, fakePodList)
+	pods, err := s.indexer.GetPodScores(s.T().Context(), nil, nil, prompt, nil, defaultModelName, fakePodList)
 	s.Require().NoError(err)
 	s.T().Logf("Received pod scores: %+v", pods)
 	s.Empty(pods, "expected no pod scores since no keys were added to the index")
@@ -507,20 +507,20 @@ func (s *UDSTokenizerSuite) TestPrefixReduction() {
 	fakePodList := []string{s.Pod1IP}
 
 	// Before indexing — no match expected.
-	pods, err := s.indexer.GetPodScores(s.T().Context(), nil, fullPrompt, nil, defaultModelName, fakePodList)
+	pods, err := s.indexer.GetPodScores(s.T().Context(), nil, nil, fullPrompt, nil, defaultModelName, fakePodList)
 	s.Require().NoError(err)
 	s.Empty(pods, "expected no pod scores before indexing")
 
 	s.addEntriesToIndex(fullEngineKeys, fullRequestKeys, fakePodList)
 
 	// Mid-length prompt should match.
-	pods, err = s.indexer.GetPodScores(s.T().Context(), nil, midPrompt, nil, defaultModelName, fakePodList)
+	pods, err = s.indexer.GetPodScores(s.T().Context(), nil, nil, midPrompt, nil, defaultModelName, fakePodList)
 	s.Require().NoError(err)
 	s.Greater(int(pods[s.Pod1IP]), 0, "mid-prompt should have scored > 0")
 	s.T().Logf("Mid prompt scores: %+v", pods)
 
 	// Short prompt should match.
-	pods, err = s.indexer.GetPodScores(s.T().Context(), nil, shortPrompt, nil, defaultModelName, fakePodList)
+	pods, err = s.indexer.GetPodScores(s.T().Context(), nil, nil, shortPrompt, nil, defaultModelName, fakePodList)
 	s.Require().NoError(err)
 	s.Len(pods, len(fakePodList), "expected pod scores for short prompt")
 	s.T().Logf("Short prompt scores: %+v", pods)
@@ -556,14 +556,14 @@ func (s *UDSTokenizerSuite) TestChatCompletionsFlow() {
 	fakePodList := []string{s.Pod1IP}
 
 	// First lookup — no match.
-	pods, err := s.indexer.GetPodScores(s.T().Context(), renderReq, "", nil, defaultModelName, fakePodList)
+	pods, err := s.indexer.GetPodScores(s.T().Context(), renderReq, nil, "", nil, defaultModelName, fakePodList)
 	s.Require().NoError(err)
 	s.Empty(pods, "expected no pod scores on first lookup")
 
 	// Index and lookup again.
 	s.addEntriesToIndex(engineKeys, requestKeys, fakePodList)
 
-	pods, err = s.indexer.GetPodScores(s.T().Context(), renderReq, "", nil, defaultModelName, fakePodList)
+	pods, err = s.indexer.GetPodScores(s.T().Context(), renderReq, nil, "", nil, defaultModelName, fakePodList)
 	s.Require().NoError(err)
 	s.Len(pods, 1, "expected one pod score after indexing")
 	s.Greater(pods[s.Pod1IP], float64(0), "expected positive pod score")
@@ -627,7 +627,7 @@ func (s *UDSTokenizerSuite) TestScoreTokensConsistentWithGetPodScores() {
 	engineKeys, requestKeys := s.promptToEngineAndRequestKeys(tokens)
 	s.addEntriesToIndex(engineKeys, requestKeys, fakePodList)
 
-	scoresFromPrompt, err := s.indexer.GetPodScores(s.T().Context(), nil, prompt, nil, defaultModelName, fakePodList)
+	scoresFromPrompt, err := s.indexer.GetPodScores(s.T().Context(), nil, nil, prompt, nil, defaultModelName, fakePodList)
 	s.Require().NoError(err)
 
 	scoresFromTokens, err := s.indexer.ScoreTokens(s.T().Context(), tokens, defaultModelName, fakePodList, nil)

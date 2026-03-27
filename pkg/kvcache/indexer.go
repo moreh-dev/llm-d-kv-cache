@@ -172,11 +172,20 @@ func (k *Indexer) ComputeBlockKeys(ctx context.Context, renderReq *types.RenderC
 // relevant.
 //
 // The function returns a map of pod identifiers to scores.
-func (k *Indexer) GetPodScores(ctx context.Context, renderReq *types.RenderChatRequest, prompt string, messages []byte, modelName string,
+func (k *Indexer) GetPodScores(ctx context.Context, renderReq *types.RenderChatRequest,
+	renderResponsesReq *types.RenderResponsesRequest,
+	prompt string, messages []byte, modelName string,
 	podIdentifiers []string,
 ) (map[string]float64, error) {
 	// 1. tokenize prompt
-	tokens, features := k.tokenizersPool.Tokenize(renderReq, prompt, messages)
+	var tokens []uint32
+	var features *tokenization.MultiModalFeatures
+	switch {
+	case renderResponsesReq != nil:
+		tokens = k.tokenizersPool.TokenizeResponses(renderResponsesReq)
+	default:
+		tokens, features = k.tokenizersPool.Tokenize(renderReq, prompt, messages)
+	}
 
 	// 2. Truncate prompt (if set in the request)
 	if renderReq != nil && renderReq.TruncatePromptTokens != nil {

@@ -1,0 +1,3 @@
+[default.extend-words]
+# Latin word in Lorem Ipsum text
+varius = "varius"

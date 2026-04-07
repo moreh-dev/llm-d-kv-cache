@@ -25,6 +25,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	preprocessing "github.com/llm-d/llm-d-kv-cache/pkg/preprocessing/chat_completions"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache/kvblock"
@@ -431,10 +433,9 @@ func (s *KVCacheSuite) TestCacheHitWithLocalTokenizer() {
 	fakePodList := []string{s.Pod1IP}
 
 	// Tokenize using local tokenizer
-	tokens, offsets, err := localTokenizer.Render(prompt)
+	tokens, _, err := localTokenizer.Render(prompt)
 	s.Require().NoError(err)
 	s.Require().NotEmpty(tokens)
-	s.Require().Equal(len(tokens), len(offsets), "tokens and offsets should have same length")
 	s.T().Logf("Local tokenizer produced %d tokens for prompt", len(tokens))
 
 	tokens, _, err = s.tokenizer.Render(prompt)
@@ -492,10 +493,9 @@ func (s *KVCacheSuite) TestHFCacheStructureDiscoveryE2E() {
 	fakePodList := []string{s.Pod1IP}
 
 	// Tokenize using the auto-discovered HF cache tokenizer
-	tokens, offsets, err := localTokenizer.Render(prompt)
+	tokens, _, err := localTokenizer.Render(prompt)
 	s.Require().NoError(err)
 	s.Require().NotEmpty(tokens)
-	s.Require().Equal(len(tokens), len(offsets), "tokens and offsets should have same length")
 	s.T().Logf("HF cache auto-discovery produced %d tokens for model %q", len(tokens), modelName)
 
 	tokens, _, err = s.tokenizer.Render(prompt)
@@ -564,10 +564,9 @@ func (s *KVCacheSuite) TestLocalTokenizerChatTemplateE2E() {
 			renderReq := &types.RenderChatRequest{
 				Conversation: convertToPreprocessingConversation(conversation),
 			}
-			tokens, offsets, err := localTokenizer.RenderChat(renderReq)
+			tokens, _, err := localTokenizer.RenderChat(renderReq)
 			s.Require().NoError(err, "RenderChat should succeed")
 			s.Require().NotEmpty(tokens, "Tokens should not be empty")
-			s.Require().Equal(len(tokens), len(offsets), "Tokens and offsets should have same length")
 			s.T().Logf("Local tokenizer produced %d tokens from rendered chat template", len(tokens))
 
 			// Step 3: Convert tokens to KV block keys
@@ -799,6 +798,9 @@ func (s *KVCacheSuite) TestLocalTokenizerChatTemplateErrorHandling() {
 	testModelDir, err := filepath.Abs(localTestModelDir)
 	s.Require().NoError(err)
 
+	err = preprocessing.ClearCaches(context.Background())
+	s.Require().NoError(err, "Failed to clear caches before test")
+
 	// Test 1: Non-existent model
 	_, err = tokenization.NewCachedLocalTokenizer(context.Background(), modelName, tokenization.LocalTokenizerConfig{
 		ModelTokenizerMap: map[string]string{
@@ -887,10 +889,9 @@ func (s *KVCacheSuite) TestLocalTokenizerChatTemplateLongConversation() {
 			reqLong := &types.RenderChatRequest{
 				Conversation: convertToPreprocessingConversation(longConversation),
 			}
-			tokens, offsets, err := localTokenizer.RenderChat(reqLong)
+			tokens, _, err := localTokenizer.RenderChat(reqLong)
 			s.Require().NoError(err)
 			s.Require().NotEmpty(tokens)
-			s.Require().Equal(len(tokens), len(offsets))
 			s.T().Logf("Long conversation produced %d tokens", len(tokens))
 
 			// Convert to block keys

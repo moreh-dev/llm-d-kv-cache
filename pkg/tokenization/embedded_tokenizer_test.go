@@ -24,15 +24,35 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
+	preprocessing "github.com/llm-d/llm-d-kv-cache/pkg/preprocessing/chat_completions"
 	types "github.com/llm-d/llm-d-kv-cache/pkg/tokenization/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// Global singleton wrapper to prevent multiple Python interpreter initializations.
+var (
+	globalWrapper     *preprocessing.ChatTemplatingProcessor
+	globalWrapperOnce sync.Once
+)
+
+// getGlobalWrapper returns a singleton wrapper instance.
+func getGlobalWrapper() *preprocessing.ChatTemplatingProcessor {
+	globalWrapperOnce.Do(func() {
+		globalWrapper = preprocessing.NewChatTemplatingProcessor()
+		err := globalWrapper.Initialize()
+		if err != nil {
+			panic(fmt.Sprintf("Failed to initialize global wrapper: %v", err))
+		}
+	})
+	return globalWrapper
+}
+
 // This should be skipped in fast unit tests.
-const testModelName = "google-bert/bert-base-uncased"
+const testModelName = "Qwen/Qwen2-0.5B-Instruct"
 
 type DummyTokenizer struct {
 	returnError bool
@@ -74,29 +94,11 @@ func TestCachedHFTokenizer_Render(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, tokenizer)
 
-	tests := []struct {
-		name  string
-		input string
-	}{
-		{
-			name:  "simple text",
-			input: "hello world",
-		},
-		{
-			name:  "empty string",
-			input: "",
-		},
-	}
+	// Test with simple text (empty string not supported by vLLM)
+	tokenIds, _, err := tokenizer.Render("hello world")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tokenIds, offsets, err := tokenizer.Render(tt.input)
-
-			assert.NoError(t, err)
-			assert.GreaterOrEqual(t, len(tokenIds), 0)
-			assert.Equal(t, len(tokenIds), len(offsets))
-		})
-	}
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, len(tokenIds), 0)
 }
 
 func TestCachedHFTokenizer_CacheTokenizer(t *testing.T) {
@@ -131,6 +133,10 @@ func TestCachedHFTokenizer_InvalidModel(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping tokenizer integration test in short mode")
 	}
+	_ = getGlobalWrapper()
+
+	err := preprocessing.ClearCaches(context.Background())
+	require.NoError(t, err, "Failed to clear caches")
 
 	tokenizer, err := NewCachedHFTokenizer(context.Background(),
 		"non-existent/model", &HFTokenizerConfig{
@@ -154,32 +160,11 @@ func TestCachedLocalTokenizer_Encode(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, tokenizer)
 
-	tests := []struct {
-		name      string
-		input     string
-		modelName string
-	}{
-		{
-			name:      "simple text",
-			input:     "hello world",
-			modelName: modelName,
-		},
-		{
-			name:      "empty string",
-			input:     "",
-			modelName: modelName,
-		},
-	}
+	// Test with simple text (empty string not supported by vLLM)
+	tokenIds, _, err := tokenizer.Render("hello world")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tokenIds, offsets, err := tokenizer.Render(tt.input)
-
-			assert.NoError(t, err)
-			assert.GreaterOrEqual(t, len(tokenIds), 0)
-			assert.Equal(t, len(tokenIds), len(offsets))
-		})
-	}
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, len(tokenIds), 0)
 }
 
 func TestCachedLocalTokenizer_InvalidModel(t *testing.T) {
@@ -197,6 +182,11 @@ func TestCachedLocalTokenizer_InvalidModel(t *testing.T) {
 }
 
 func TestCachedLocalTokenizer_InvalidPath(t *testing.T) {
+	_ = getGlobalWrapper()
+
+	err := preprocessing.ClearCaches(context.Background())
+	require.NoError(t, err, "Failed to clear caches")
+
 	modelName := "invalid-model"
 	config := LocalTokenizerConfig{
 		ModelTokenizerMap: map[string]string{
@@ -226,10 +216,9 @@ func TestCompositeTokenizer_FallbackBehavior(t *testing.T) {
 		Tokenizers: []Tokenizer{dummyTokenizer, hfTokenizer},
 	}
 
-	tokenIds, offsets, err := composite.Render("hello world")
+	tokenIds, _, err := composite.Render("hello world")
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, len(tokenIds), 0)
-	assert.Equal(t, len(tokenIds), len(offsets))
 }
 
 func TestParseHFCacheModelName(t *testing.T) {

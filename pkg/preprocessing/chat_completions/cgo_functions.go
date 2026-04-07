@@ -36,12 +36,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-type GetOrCreateTokenizerKeyRequest struct {
-	IsLocal     bool   `json:"is_local,omitempty"`
-	DownloadDir string `json:"download_dir,omitempty"`
-	Model       string `json:"model"`
-	Revision    string `json:"revision,omitempty"`
-	Token       string `json:"token,omitempty"`
+type InitAppRequest struct {
+	IsLocal           bool   `json:"is_local,omitempty"`
+	DownloadDir       string `json:"download_dir,omitempty"`
+	Model             string `json:"model"`
+	Tokenizer         string `json:"tokenizer,omitempty"`
+	TokenizerMode     string `json:"tokenizer_mode,omitempty"`
+	Revision          string `json:"revision,omitempty"`
+	TokenizerRevision string `json:"tokenizer_revision,omitempty"`
+	Token             string `json:"token,omitempty"`
 }
 
 // Type aliases for backward compatibility - these types are now defined in tokenization/types.
@@ -88,38 +91,37 @@ func (w *ChatTemplatingProcessor) Finalize() {
 	C.Py_FinalizeGo()
 }
 
-// GetOrCreateTokenizerKey returns the cache key for the tokenizer specified in the request.
-func (w *ChatTemplatingProcessor) GetOrCreateTokenizerKey(
+// InitApp initializes the vLLM app with the specified tokenizer configuration.
+func (w *ChatTemplatingProcessor) InitApp(
 	ctx context.Context,
-	req *GetOrCreateTokenizerKeyRequest,
-) (string, error) {
+	req *InitAppRequest,
+) error {
 	traceLogger := log.FromContext(ctx).V(logging.TRACE).WithName("loadTokenizer")
 	if req == nil {
 		traceLogger.Error(nil, "Received nil request")
-		return "", fmt.Errorf("received nil request")
+		return fmt.Errorf("received nil request")
 	}
 	// Convert request to JSON
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		traceLogger.Error(err, "Failed to marshal request")
-		return "", fmt.Errorf("failed to marshal request: %w", err)
+		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 	// Call the cached Python function
 	cJSONString := C.CString(string(reqJSON))
 	defer C.free(unsafe.Pointer(cJSONString))
-	cResult := C.Py_CallGetOrCreateTokenizerKey(cJSONString)
-	if cResult == nil {
-		traceLogger.Error(nil, "C function returned nil")
-		return "", fmt.Errorf("python get_or_create_tokenizer_key failed")
+	cResult := C.Py_CallInitApp(cJSONString)
+	if cResult != 0 {
+		traceLogger.Error(nil, "C function returned error")
+		return fmt.Errorf("python init_app failed")
 	}
-	defer C.free(unsafe.Pointer(cResult))
 
-	return C.GoString(cResult), nil
+	return nil
 }
 
 // RenderChat renders a chat template by calling Py_CallRenderChat, which invokes
 // the Python chat_render wrapper. Returns token IDs and offset mappings from the JSON response.
-func (w *ChatTemplatingProcessor) RenderChat(ctx context.Context, //nolint:gocritic // unnamedResult
+func (w *ChatTemplatingProcessor) RenderChat(ctx context.Context,
 	req *RenderChatRequest,
 ) ([]uint32, []Offset, error) {
 	traceLogger := log.FromContext(ctx).V(logging.TRACE).WithName("chatRender")
@@ -157,7 +159,7 @@ func (w *ChatTemplatingProcessor) RenderChat(ctx context.Context, //nolint:gocri
 }
 
 // Render RenderedString.
-func (w *ChatTemplatingProcessor) Render( //nolint:gocritic // unnamedResult
+func (w *ChatTemplatingProcessor) Render(
 	ctx context.Context,
 	req *RenderRequest,
 ) ([]uint32, []Offset, error) {

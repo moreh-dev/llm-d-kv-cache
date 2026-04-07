@@ -20,7 +20,7 @@ limitations under the License.
 
 // Global variables for caching
 PyObject* g_chat_template_module = NULL;
-PyObject* g_get_or_create_tokenizer_key_func = NULL;
+PyObject* g_init_app_func = NULL;
 PyObject* g_render_chat_func = NULL;
 PyObject* g_render_func = NULL;
 int g_initialized = 0;
@@ -102,9 +102,9 @@ void Py_FinalizeGo() {
     g_finalized = 1;
 
     // Clean up module references safely
-    if (g_get_or_create_tokenizer_key_func) {
-        Py_DECREF(g_get_or_create_tokenizer_key_func);
-        g_get_or_create_tokenizer_key_func = NULL;
+    if (g_init_app_func) {
+        Py_DECREF(g_init_app_func);
+        g_init_app_func = NULL;
     }
     if (g_render_chat_func) {
         Py_DECREF(g_render_chat_func);
@@ -205,15 +205,15 @@ int Py_InitChatTemplateModule() {
         return -1;
     }
 
-    // Get the get_or_create_tokenizer_key function
-    g_get_or_create_tokenizer_key_func = PyDict_GetItemString(module_dict, "get_or_create_tokenizer_key");
-    if (!g_get_or_create_tokenizer_key_func || !PyCallable_Check(g_get_or_create_tokenizer_key_func)) {
-        printf("[C] Py_InitChatTemplateModule ERROR - get_or_create_tokenizer_key function not found or not callable\n");
+    // Get the init_app function
+    g_init_app_func = PyDict_GetItemString(module_dict, "init_app");
+    if (!g_init_app_func || !PyCallable_Check(g_init_app_func)) {
+        printf("[C] Py_InitChatTemplateModule ERROR - init_app function not found or not callable\n");
         PyGILState_Release(gil_state);
         PyThread_release_lock(g_init_lock);
         return -1;
     }
-    Py_INCREF(g_get_or_create_tokenizer_key_func);  // Keep a reference
+    Py_INCREF(g_init_app_func);  // Keep a reference
 
     // Get the render_chat function
     g_render_chat_func = PyDict_GetItemString(module_dict, "render_chat");
@@ -245,32 +245,20 @@ int Py_InitChatTemplateModule() {
 
 
 
-// Call the cached get_or_create_tokenizer_key function
-char* Py_CallGetOrCreateTokenizerKey(const char* json_request) {
-    // Try direct call first (fast path)
-    char* result = Py_CallGetOrCreateTokenizerKeyInternal(json_request);
-    if (result != NULL) {
-        return result;  // Success on first try
-    }
-
-    // If failed, just return NULL (no retry, no reload)
-    return NULL;
-}
-
-// Internal function that does the actual work
-char* Py_CallGetOrCreateTokenizerKeyInternal(const char* json_request) {
+// Call the cached init_app function
+int Py_CallInitApp(const char* json_request) {
     // Check if Python interpreter is still valid
     if (!Py_IsInitialized()) {
-        printf("[C] Py_CallGetOrCreateTokenizerKeyInternal ERROR - Python interpreter not initialized\n");
+        printf("[C] Py_CallInitApp ERROR - Python interpreter not initialized\n");
         fflush(stdout);
-        return NULL;
+        return -1;
     }
 
     // Simple validation
     if (!json_request) {
-        printf("[C] Py_CallGetOrCreateTokenizerKeyInternal ERROR - Input is NULL\n");
+        printf("[C] Py_CallInitApp ERROR - Input is NULL\n");
         fflush(stdout);
-        return NULL;
+        return -1;
     }
 
     // Acquire GIL for Python operations
@@ -278,53 +266,45 @@ char* Py_CallGetOrCreateTokenizerKeyInternal(const char* json_request) {
     // Create Python string from JSON request
     PyObject* py_json = PyUnicode_FromString(json_request);
     if (!py_json) {
-        printf("[C] Py_CallGetOrCreateTokenizerKeyInternal ERROR - Failed to create Python string\n");
+        printf("[C] Py_CallInitApp ERROR - Failed to create Python string\n");
         fflush(stdout);
         PyGILState_Release(gil_state);
-        return NULL;
+        return -1;
     }
 
     // Create arguments tuple
     PyObject* args = PyTuple_Pack(1, py_json);
     if (!args) {
-        printf("[C] Py_CallGetOrCreateTokenizerKeyInternal ERROR - Failed to create args tuple\n");
+        printf("[C] Py_CallInitApp ERROR - Failed to create args tuple\n");
         fflush(stdout);
         Py_DECREF(py_json);
         PyGILState_Release(gil_state);
-        return NULL;
+        return -1;
     }
 
     // Call the cached function
-    PyObject* py_result = PyObject_CallObject(g_get_or_create_tokenizer_key_func, args);
+    PyObject* py_result = PyObject_CallObject(g_init_app_func, args);
 
     // Clean up args
     Py_DECREF(args);
     Py_DECREF(py_json);
 
-    char* cresult = NULL;
+    int ret = 0;
     if (py_result) {
-        // Convert to C string
-        const char* s = PyUnicode_AsUTF8(py_result);
-        if (s) {
-            cresult = strdup(s);
-        }
-        else {
-            printf("[C] Py_CallGetOrCreateTokenizerKeyInternal ERROR - Failed to convert result to C string\n");
-            fflush(stdout);
-        }
         Py_DECREF(py_result);
     }
     else {
-        printf("[C] Py_CallGetOrCreateTokenizerKeyInternal ERROR - Python function returned NULL\n");
+        printf("[C] Py_CallInitApp ERROR - Python function raised an exception\n");
         fflush(stdout);
         PyErr_Print();
         fflush(stderr);
+        ret = -1;
     }
 
     // Release GIL
     PyGILState_Release(gil_state);
 
-    return cresult;
+    return ret;
 }
 
 // Call the cached render_chat function
@@ -536,11 +516,11 @@ char* Py_ClearCaches() {
 void Py_CleanupChatTemplateModule() {
     if (g_initialized && Py_IsInitialized()) {
         PyGILState_STATE state = PyGILState_Ensure();
-        Py_XDECREF(g_get_or_create_tokenizer_key_func);
+        Py_XDECREF(g_init_app_func);
         Py_XDECREF(g_render_chat_func);
         Py_XDECREF(g_render_func);
         Py_XDECREF(g_chat_template_module);
-        g_get_or_create_tokenizer_key_func = NULL;
+        g_init_app_func = NULL;
         g_render_chat_func = NULL;
         g_render_func = NULL;
         g_chat_template_module = NULL;
@@ -557,9 +537,9 @@ int Py_ReinitializeGo() {
     g_process_initialized = 0;
 
     // Clean up cached objects
-    if (g_get_or_create_tokenizer_key_func) {
-        Py_DECREF(g_get_or_create_tokenizer_key_func);
-        g_get_or_create_tokenizer_key_func = NULL;
+    if (g_init_app_func) {
+        Py_DECREF(g_init_app_func);
+        g_init_app_func = NULL;
     }
     if (g_render_chat_func) {
         Py_DECREF(g_render_chat_func);

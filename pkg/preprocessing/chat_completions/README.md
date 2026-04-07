@@ -44,15 +44,17 @@ This package provides a library to be used for templating before using the `kvca
 
 The following request structures are used for tokenization:
 
-**GetOrCreateTokenizerKeyRequest** - Initialize and cache a tokenizer:
+**InitAppRequest** - Initialize the tokenizer (singleton per process):
 - `Model` - Model ID or path (HF model ID, local directory, or tokenizer file path)
 - `IsLocal` - (Optional) Whether the model is local
 - `Revision` - (Optional) Model revision
 - `Token` - (Optional) Hugging Face token for private models
 - `DownloadDir` - (Optional) Directory to download the model
 
+> **Singleton pattern**: Only one model can be initialized per process. Once `InitApp` succeeds, subsequent calls are no-ops regardless of parameters.
+
 **RenderChatRequest** - Render chat template and tokenize:
-- `Key` - Tokenizer cache key from `GetOrCreateTokenizerKey`
+- Requires `InitApp` to be called first
 - `Conversation` - List of messages (role/content pairs)
 - `Tools` - (Optional) List of tool schemas
 - `Documents` - (Optional) List of document dicts
@@ -65,7 +67,7 @@ The following request structures are used for tokenization:
 These fields align with the transformers library's [`apply_chat_template`](https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/tokenization_utils_base.py#L1571) method parameters.
 
 **RenderRequest** - Direct tokenization without chat template:
-- `Key` - Tokenizer cache key from `GetOrCreateTokenizerKey`
+- Requires `InitApp` to be called first
 - `Text` - The text to tokenize
 - `AddSpecialTokens` - (Optional) Whether to add special tokens
 
@@ -78,14 +80,14 @@ The templating process (steps 1.1-1.4) handles the conversion from structured re
     └── cgo_functions.go:NewChatTemplatingProcessor()
         └── Creates ChatTemplatingProcessor struct
 
-1.2. **Get Tokenizer Key**: wrapper.GetOrCreateTokenizerKey(ctx, req)
-    ├── cgo_functions.go:GetOrCreateTokenizerKey(ctx, req)
-    │   ├── C.Py_CallGetOrCreateTokenizerKey() - **CGO Binding** to Python
-    │   └── **Python Wrapper**: tokenizer_wrapper.py:get_or_create_tokenizer_key()
+1.2. **Get Tokenizer Key**: wrapper.InitApp(ctx, req)
+    ├── cgo_functions.go:InitApp(ctx, req)
+    │   ├── C.Py_CallInitApp() - **CGO Binding** to Python
+    │   └── **Python Wrapper**: tokenizer_wrapper.py:init_app()
     │       └── from vllm.tokenizers import get_tokenizer
     │           tokenizer = get_tokenizer(...)
-    │           _tokenizer_cache[key] = tokenizer
-    └── Returns: Cache key string (e.g., "model:revision:is_local")
+    │           _app = build_app(args)
+    └── Returns: Initialized vLLM app instance
 
 1.3. **RenderChat (Template + Tokenization)**: wrapper.RenderChat(ctx, req)
     ├── cgo_functions.go:RenderChat(ctx, req)
@@ -119,7 +121,7 @@ The templating process (steps 1.1-1.4) handles the conversion from structured re
 - **Thread-Safe Initialization**: Global locks prevent multiple initializations
 
 ##### **Function Caching**
-- **Cached Python Functions**: `get_or_create_tokenizer_key`, `render_chat`, and `render` cached globally
+- **Cached Python Functions**: `init_app`, `render_chat`, and `render` cached globally
 - **Module-Level Caching**: Python modules imported once and reused
 - **Thread Safety**: GIL management for concurrent access
 

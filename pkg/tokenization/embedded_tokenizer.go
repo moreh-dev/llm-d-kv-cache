@@ -34,11 +34,28 @@ import (
 	types "github.com/llm-d/llm-d-kv-cache/pkg/tokenization/types"
 )
 
+// TokenizerOptions holds common tokenizer configuration options shared by both
+// HuggingFace and Local tokenizer configurations.
+type TokenizerOptions struct {
+	// Tokenizer is the tokenizer to use. If not specified, defaults to the model path.
+	Tokenizer string `json:"tokenizer,omitempty"`
+	// TokenizerMode specifies the tokenizer mode. Options:
+	//   - "auto" (default): use mistral_common for Mistral models if available, otherwise "hf"
+	//   - "hf": use the fast tokenizer if available
+	//   - "slow": always use the slow tokenizer
+	//   - "mistral": always use the tokenizer from mistral_common
+	//   - "deepseek_v32": always use the tokenizer from deepseek_v32
+	TokenizerMode string `json:"tokenizerMode,omitempty"`
+	// TokenizerRevision is the revision of the tokenizer to use.
+	TokenizerRevision string `json:"tokenizerRevision,omitempty"`
+}
+
 // HFTokenizerConfig holds the configuration for the HuggingFace tokenizer.
 type HFTokenizerConfig struct {
 	Enabled            bool   `json:"enabled"`
 	HuggingFaceToken   string `json:"huggingFaceToken"`
 	TokenizersCacheDir string `json:"tokenizersCacheDir"` // Directory for caching tokenizers
+	TokenizerOptions   `json:",inline"`
 }
 
 func (cfg *HFTokenizerConfig) IsEnabled() bool {
@@ -103,6 +120,9 @@ type LocalTokenizerConfig struct {
 	//
 	// Example map: {"model-a": "/mnt/models/model-a/tokenizer.json", ...}
 	ModelTokenizerMap map[string]string `json:"modelTokenizerMap,omitempty"`
+
+	// TokenizerOptions holds common tokenizer configuration options.
+	TokenizerOptions `json:",inline"`
 }
 
 // IsEnabled returns true if the local tokenizer configuration has any model mappings.
@@ -276,11 +296,14 @@ func NewCachedHFTokenizer(ctx context.Context, modelName string, config *HFToken
 		return nil, fmt.Errorf("failed to initialize chat templater: %w", err)
 	}
 
-	tokenizerCacheKey, err := chatTemplateRenderer.GetOrCreateTokenizerKey(ctx, &preprocessing.GetOrCreateTokenizerKeyRequest{
-		IsLocal:     false,
-		Model:       modelName,
-		DownloadDir: config.TokenizersCacheDir,
-		Token:       config.HuggingFaceToken,
+	err = chatTemplateRenderer.InitApp(ctx, &preprocessing.InitAppRequest{
+		IsLocal:           false,
+		Model:             modelName,
+		DownloadDir:       config.TokenizersCacheDir,
+		Token:             config.HuggingFaceToken,
+		Tokenizer:         config.Tokenizer,
+		TokenizerMode:     config.TokenizerMode,
+		TokenizerRevision: config.TokenizerRevision,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tokenizer with cache: %w", err)
@@ -289,7 +312,6 @@ func NewCachedHFTokenizer(ctx context.Context, modelName string, config *HFToken
 	return &HFCachedTokenizer{
 		CachedTokenizer: CachedTokenizer{
 			chatTemplateRenderer: chatTemplateRenderer,
-			tokenizerCacheKey:    tokenizerCacheKey,
 		},
 		hfTokenizerConfig: config,
 	}, nil
@@ -320,18 +342,20 @@ func NewCachedLocalTokenizer(ctx context.Context, modelName string, config Local
 		return nil, fmt.Errorf("tokenizer for model %q not found", modelName)
 	}
 
-	tokenizerCacheKey, err := chatTemplater.GetOrCreateTokenizerKey(ctx, &preprocessing.GetOrCreateTokenizerKeyRequest{
-		IsLocal: true,
-		Model:   path,
+	err = chatTemplater.InitApp(ctx, &preprocessing.InitAppRequest{
+		IsLocal:           true,
+		Model:             path,
+		Tokenizer:         config.Tokenizer,
+		TokenizerMode:     config.TokenizerMode,
+		TokenizerRevision: config.TokenizerRevision,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get or create tokenizer key with cache: %w", err)
+		return nil, fmt.Errorf("failed to initialize tokenizer app: %w", err)
 	}
 
 	return &LocalCachedTokenizer{
 		CachedTokenizer: CachedTokenizer{
 			chatTemplateRenderer: chatTemplater,
-			tokenizerCacheKey:    tokenizerCacheKey,
 		},
 		localTokenizerConfig: &config,
 	}, nil
@@ -342,7 +366,6 @@ func (t *CachedTokenizer) RenderChat(
 ) ([]uint32, []types.Offset, error) {
 	ctx := context.TODO()
 
-	req.Key = t.tokenizerCacheKey
 	tokens, offsets, err := t.chatTemplateRenderer.RenderChat(ctx, req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to render chat template: %w", err)
@@ -356,7 +379,6 @@ func (t *CachedTokenizer) Render(prompt string) ([]uint32, []types.Offset, error
 	ctx := context.TODO()
 
 	tokens, offsets, err := t.chatTemplateRenderer.Render(ctx, &types.RenderRequest{
-		Key:              t.tokenizerCacheKey,
 		Text:             prompt,
 		AddSpecialTokens: true,
 	})

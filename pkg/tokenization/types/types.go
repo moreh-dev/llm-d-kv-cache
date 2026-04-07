@@ -27,7 +27,6 @@ type Conversation struct {
 // RenderChatRequest represents the request to render a chat template.
 type RenderChatRequest struct {
 	// The Python wrapper will handle converting this to a batched list if needed.
-	Key                       string                 `json:"key"`
 	Conversation              []Conversation         `json:"conversation"`
 	Tools                     []interface{}          `json:"tools,omitempty"`
 	Documents                 []interface{}          `json:"documents,omitempty"`
@@ -40,7 +39,6 @@ type RenderChatRequest struct {
 }
 
 type RenderRequest struct {
-	Key              string `json:"key"`
 	Text             string `json:"text"`
 	AddSpecialTokens bool   `json:"add_special_tokens,omitempty"`
 }

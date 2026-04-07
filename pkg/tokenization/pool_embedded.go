@@ -64,39 +64,49 @@ func NewTokenizationPool(ctx context.Context, config *Config) (*Pool, error) {
 		return nil, fmt.Errorf("at least one tokenizer config must be enabled")
 	}
 
-	tokenizers := make([]Tokenizer, 0, 3)
-
-	if config.LocalTokenizerConfig.IsEnabled() {
-		localTokenizer, err := NewCachedLocalTokenizer(ctx,
-			config.ModelName, *config.LocalTokenizerConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create local tokenizer: %w", err)
-		}
-		tokenizers = append(tokenizers, localTokenizer)
+	// Tokenizer initializers in priority order: Local > HF > UDS.
+	// The first successfully initialized tokenizer is used.
+	type tokenizerInit struct {
+		enabled bool
+		create  func() (Tokenizer, error)
+	}
+	initializers := []tokenizerInit{
+		{
+			enabled: config.LocalTokenizerConfig.IsEnabled(),
+			create: func() (Tokenizer, error) {
+				return NewCachedLocalTokenizer(ctx, config.ModelName, *config.LocalTokenizerConfig)
+			},
+		},
+		{
+			enabled: config.HFTokenizerConfig.IsEnabled(),
+			create: func() (Tokenizer, error) {
+				return NewCachedHFTokenizer(ctx, config.ModelName, config.HFTokenizerConfig)
+			},
+		},
+		{
+			enabled: config.UdsTokenizerConfig.IsEnabled(),
+			create: func() (Tokenizer, error) {
+				return NewUdsTokenizer(ctx, config.UdsTokenizerConfig, config.ModelName)
+			},
+		},
 	}
 
-	if config.UdsTokenizerConfig.IsEnabled() {
-		udsTokenizer, err := NewUdsTokenizer(ctx,
-			config.UdsTokenizerConfig, config.ModelName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create UDS tokenizer: %w", err)
+	var tokenizer Tokenizer
+	for _, init := range initializers {
+		if init.enabled {
+			t, err := init.create()
+			if err != nil {
+				return nil, err
+			}
+			tokenizer = t
+			break
 		}
-		tokenizers = append(tokenizers, udsTokenizer)
-	}
-
-	if config.HFTokenizerConfig.IsEnabled() {
-		hfTokenizer, err := NewCachedHFTokenizer(ctx,
-			config.ModelName, config.HFTokenizerConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create HuggingFace tokenizer: %w", err)
-		}
-		tokenizers = append(tokenizers, hfTokenizer)
 	}
 
 	return &Pool{
 		modelName: config.ModelName,
 		workers:   config.WorkersCount,
 		queue:     workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[Task]()),
-		tokenizer: &CompositeTokenizer{Tokenizers: tokenizers},
+		tokenizer: tokenizer,
 	}, nil
 }

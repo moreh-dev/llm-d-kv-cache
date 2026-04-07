@@ -51,8 +51,8 @@ func getGlobalWrapper() *preprocessing.ChatTemplatingProcessor {
 	return globalWrapper
 }
 
-// TestGetOrCreateTokenizerKey tests the get_or_create_tokenizer_key function.
-func TestGetOrCreateTokenizerKey(t *testing.T) {
+// TestInitApp tests the InitApp function.
+func TestInitApp(t *testing.T) {
 	wrapper := getGlobalWrapper()
 
 	// Clear caches to ensure accurate timing measurements
@@ -80,7 +80,7 @@ func TestGetOrCreateTokenizerKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			request := &preprocessing.GetOrCreateTokenizerKeyRequest{
+			request := &preprocessing.InitAppRequest{
 				Model:    tt.modelName,
 				Revision: tt.revision,
 				Token:    tt.token,
@@ -88,14 +88,14 @@ func TestGetOrCreateTokenizerKey(t *testing.T) {
 
 			// Profile the function call
 			start := time.Now()
-			_, err := wrapper.GetOrCreateTokenizerKey(context.Background(), request)
+			err := wrapper.InitApp(context.Background(), request)
 			duration := time.Since(start)
 
 			// Log performance
 			t.Logf("Model: %s, Duration: %v", tt.modelName, duration)
 			if tt.expectTemplate {
 				// Models that should have templates
-				require.NoError(t, err, "GetOrCreateTokenizerKey should not return an error")
+				require.NoError(t, err, "InitApp should not return an error")
 			} else {
 				// Models that don't have chat templates
 				if err != nil {
@@ -235,7 +235,7 @@ func TestRenderChat(t *testing.T) {
 			name:      "Model Default Template - System Message",
 			modelName: "ibm-granite/granite-3.3-8b-instruct",
 			template:  "", // use model's default template
-			messages: []types.Conversation{
+			messages: []preprocessing.Conversation{
 				{Role: "system", Content: "You are a helpful AI assistant specialized in coding."},
 				{Role: "user", Content: "Write a Python function to calculate fibonacci numbers."},
 				{
@@ -260,15 +260,16 @@ func TestRenderChat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			key, err := wrapper.GetOrCreateTokenizerKey(ctx, &preprocessing.GetOrCreateTokenizerKeyRequest{
+			err := preprocessing.ClearCaches(ctx)
+			require.NoError(t, err, "Failed to clear caches")
+			err = wrapper.InitApp(ctx, &preprocessing.InitAppRequest{
 				Model:   tt.modelName,
 				IsLocal: true,
 			})
-			require.NoError(t, err, "Failed to get tokenizer key")
+			require.NoError(t, err, "Failed to initialize app")
 
 			start := time.Now()
-			tokens, _, err := wrapper.RenderChat(ctx, &types.RenderChatRequest{
-				Key:          key,
+			tokens, _, err := wrapper.RenderChat(ctx, &preprocessing.RenderChatRequest{
 				Conversation: tt.messages,
 				ChatTemplate: tt.template,
 			})
@@ -288,10 +289,6 @@ func TestRenderChat(t *testing.T) {
 // TestRender tests the render function.
 func TestRender(t *testing.T) {
 	wrapper := getGlobalWrapper()
-
-	// Clear caches to ensure accurate timing measurements
-	err := preprocessing.ClearCaches(context.Background())
-	require.NoError(t, err, "Failed to clear caches")
 
 	tests := []struct {
 		name           string
@@ -315,21 +312,23 @@ func TestRender(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			key, err := wrapper.GetOrCreateTokenizerKey(ctx, &preprocessing.GetOrCreateTokenizerKeyRequest{
+			// Clear caches to ensure accurate timing measurements
+			err := preprocessing.ClearCaches(ctx)
+			require.NoError(t, err, "Failed to clear caches")
+			err = wrapper.InitApp(ctx, &preprocessing.InitAppRequest{
 				Model:   tt.modelName,
 				IsLocal: true,
 			})
-			require.NoError(t, err, "Failed to get tokenizer key")
+			require.NoError(t, err, "Failed to initialize app")
 
-			request := &types.RenderRequest{
-				Key:              key,
+			request := &preprocessing.RenderRequest{
 				Text:             "Hello, how are you?",
 				AddSpecialTokens: true,
 			}
 
 			// Profile the function call
 			start := time.Now()
-			tokens, offsets, err := wrapper.Render(context.Background(), request)
+			tokens, offsets, err := wrapper.Render(ctx, request)
 			duration := time.Since(start)
 
 			// Log performance
@@ -344,8 +343,9 @@ func TestRender(t *testing.T) {
 	}
 }
 
-// TestGetOrCreateTokenizerKeyCaching tests the caching functionality.
-func TestGetOrCreateTokenizerKeyCaching(t *testing.T) {
+// TestInitAppCaching tests that the singleton pattern works correctly:
+// the second InitApp call should be a no-op (early return) since the app is already initialized.
+func TestInitAppCaching(t *testing.T) {
 	wrapper := getGlobalWrapper()
 
 	// Clear all caches to ensure we start with a clean state
@@ -353,34 +353,31 @@ func TestGetOrCreateTokenizerKeyCaching(t *testing.T) {
 	require.NoError(t, err, "Failed to clear caches")
 
 	modelName := "ibm-granite/granite-3.3-8b-instruct"
-	request := &preprocessing.GetOrCreateTokenizerKeyRequest{
+	request := &preprocessing.InitAppRequest{
 		Model:   modelName,
 		IsLocal: true,
 	}
 
-	// First call - should be cache miss
-	t.Log("=== First call (Cache MISS) ===")
+	// First call - initializes the singleton app
+	t.Log("=== First call (initialize) ===")
 	start := time.Now()
-	key1, err := wrapper.GetOrCreateTokenizerKey(context.Background(), request)
+	err = wrapper.InitApp(context.Background(), request)
 	duration1 := time.Since(start)
 	require.NoError(t, err, "First call should not return an error")
 
-	// Second call - should be cache hit
-	t.Log("=== Second call (Cache HIT) ===")
+	// Second call - should be a no-op (singleton already initialized)
+	t.Log("=== Second call (no-op) ===")
 	start = time.Now()
-	key2, err := wrapper.GetOrCreateTokenizerKey(context.Background(), request)
+	err = wrapper.InitApp(context.Background(), request)
 	duration2 := time.Since(start)
 	require.NoError(t, err, "Second call should not return an error")
 
-	// Verify that both calls returned the same key
-	assert.Equal(t, key1, key2, "Both calls should return the same tokenizer key")
-
-	// Verify performance improvement
 	t.Logf("First call duration: %v, Second call duration: %v, Speedup: %.1fx",
 		duration1, duration2, float64(duration1)/float64(duration2))
 
-	// Cache hit should be significantly faster
-	assert.Less(t, duration2, duration1, "Cache hit should be faster than cache miss")
+	// The no-op path should complete almost instantly (under 1ms),
+	// confirming the singleton early return is working.
+	assert.Less(t, duration2, time.Millisecond, "Second call should be a no-op (under 1ms)")
 }
 
 // TestRenderChatWithDocuments tests RenderChat with Documents and ChatTemplateKWArgs fields.
@@ -430,15 +427,17 @@ func TestRenderChatWithDocuments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key, err := wrapper.GetOrCreateTokenizerKey(ctx, &preprocessing.GetOrCreateTokenizerKeyRequest{
+			// Clear caches to ensure accurate timing measurements
+			err := preprocessing.ClearCaches(ctx)
+			require.NoError(t, err, "Failed to clear caches")
+			err = wrapper.InitApp(ctx, &preprocessing.InitAppRequest{
 				Model:   tt.modelName,
 				IsLocal: true,
 			})
-			require.NoError(t, err, "Failed to get tokenizer key")
+			require.NoError(t, err, "Failed to initialize app")
 
-			tokens, _, err := wrapper.RenderChat(ctx, &types.RenderChatRequest{
-				Key: key,
-				Conversation: []types.Conversation{
+			tokens, _, err := wrapper.RenderChat(ctx, &preprocessing.RenderChatRequest{
+				Conversation: []preprocessing.Conversation{
 					{Role: "user", Content: "What is the weather in Paris?"},
 					{Role: "assistant", Content: "Let me check that for you."},
 				},
@@ -503,13 +502,12 @@ func TestLongChatCompletions(t *testing.T) {
 	t.Run("Long Conversation Processing", func(t *testing.T) {
 		// Render long conversation
 		start := time.Now()
-		key, err := wrapper.GetOrCreateTokenizerKey(ctx, &preprocessing.GetOrCreateTokenizerKeyRequest{
+		err := wrapper.InitApp(ctx, &preprocessing.InitAppRequest{
 			Model:   modelName,
 			IsLocal: true,
 		})
 		require.NoError(t, err, "Failed to get tokenizer key")
 		tokens, _, err := wrapper.RenderChat(ctx, &types.RenderChatRequest{
-			Key:          key,
 			Conversation: longConversation,
 		})
 		renderDuration := time.Since(start)
@@ -525,15 +523,15 @@ func TestLongChatCompletions(t *testing.T) {
 	})
 }
 
-// BenchmarkGetOrCreateTokenizerKey benchmarks the template fetching performance.
-func BenchmarkGetOrCreateTokenizerKey(b *testing.B) {
+// BenchmarkInitApp benchmarks the template fetching performance.
+func BenchmarkInitApp(b *testing.B) {
 	wrapper := getGlobalWrapper()
 
 	// Clear caches to ensure accurate timing measurements
 	err := preprocessing.ClearCaches(context.Background())
 	require.NoError(b, err, "Failed to clear caches")
 
-	request := &preprocessing.GetOrCreateTokenizerKeyRequest{
+	request := &preprocessing.InitAppRequest{
 		Model: "ibm-granite/granite-3.3-8b-instruct",
 	}
 
@@ -544,7 +542,7 @@ func BenchmarkGetOrCreateTokenizerKey(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		start := time.Now()
-		_, err := wrapper.GetOrCreateTokenizerKey(context.Background(), request)
+		err := wrapper.InitApp(context.Background(), request)
 		require.NoError(b, err, "Benchmark should not return errors")
 		iterTime := time.Since(start)
 
@@ -578,11 +576,11 @@ func BenchmarkRenderChat(b *testing.B) {
 	err := preprocessing.ClearCaches(ctx)
 	require.NoError(b, err, "Failed to clear caches")
 
-	key, err := wrapper.GetOrCreateTokenizerKey(ctx, &preprocessing.GetOrCreateTokenizerKeyRequest{
+	err = wrapper.InitApp(ctx, &preprocessing.InitAppRequest{
 		Model:   "ibm-granite/granite-3.3-8b-instruct",
 		IsLocal: true,
 	})
-	require.NoError(b, err, "Failed to get tokenizer key")
+	require.NoError(b, err, "Failed to initialize app")
 
 	// Track first iteration time and total time
 	var firstIterationTime time.Duration
@@ -591,8 +589,7 @@ func BenchmarkRenderChat(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		start := time.Now()
-		_, _, err := wrapper.RenderChat(ctx, &types.RenderChatRequest{
-			Key: key,
+		_, _, err := wrapper.RenderChat(ctx, &preprocessing.RenderChatRequest{
 			Conversation: []types.Conversation{
 				{Role: "user", Content: "Hello"},
 				{Role: "assistant", Content: "Hi there!"},
@@ -630,11 +627,11 @@ func BenchmarkRender(b *testing.B) {
 	require.NoError(b, err, "Failed to clear caches")
 
 	ctx := context.Background()
-	key, err := wrapper.GetOrCreateTokenizerKey(ctx, &preprocessing.GetOrCreateTokenizerKeyRequest{
+	err = wrapper.InitApp(ctx, &preprocessing.InitAppRequest{
 		Model:   "ibm-granite/granite-3.3-8b-instruct",
 		IsLocal: true,
 	})
-	require.NoError(b, err, "Failed to get tokenizer key")
+	require.NoError(b, err, "Failed to initialize app")
 
 	// Track first iteration time and total time
 	var firstIterationTime time.Duration
@@ -644,7 +641,6 @@ func BenchmarkRender(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		start := time.Now()
 		_, _, err := wrapper.Render(ctx, &types.RenderRequest{
-			Key:              key,
 			Text:             "What is the capital of France?",
 			AddSpecialTokens: true,
 		})
@@ -676,18 +672,20 @@ func TestLocalTokenizer(t *testing.T) {
 	wrapper := getGlobalWrapper()
 	testModelPath := "../../tokenization/testdata/test-model"
 
-	// Get tokenizer key once for all subtests
-	key, err := wrapper.GetOrCreateTokenizerKey(context.Background(), &preprocessing.GetOrCreateTokenizerKeyRequest{
+	// Clear caches to ensure accurate timing measurements
+	err := preprocessing.ClearCaches(context.Background())
+	require.NoError(t, err, "Failed to clear caches")
+
+	// Initialize app once for all subtests
+	err = wrapper.InitApp(context.Background(), &preprocessing.InitAppRequest{
 		Model:   testModelPath,
 		IsLocal: true,
 	})
-	require.NoError(t, err, "GetOrCreateTokenizerKey should not return an error for local path")
-	assert.NotEmpty(t, key, "Returned tokenizer key should not be empty")
+	require.NoError(t, err, "InitApp should not return an error for local path")
 
 	t.Run("RenderChat", func(t *testing.T) {
-		tokens, offset, err := wrapper.RenderChat(context.Background(), &types.RenderChatRequest{
-			Key: key,
-			Conversation: []types.Conversation{
+		tokens, offset, err := wrapper.RenderChat(context.Background(), &preprocessing.RenderChatRequest{
+			Conversation: []preprocessing.Conversation{
 				{Role: "user", Content: "Hello from local tokenizer!"},
 				{Role: "assistant", Content: "Hi! I'm using a locally loaded template."},
 			},
@@ -695,24 +693,23 @@ func TestLocalTokenizer(t *testing.T) {
 		require.NoError(t, err, "RenderChat should not return an error")
 		assert.NotEmpty(t, tokens, "tokens should not be empty")
 		assert.NotNil(t, offset, "offset should not be nil")
-		assert.Contains(t, tokens, uint32(7592), "tokens should contain 7592(hello)")
+		assert.Contains(t, tokens, uint32(13225), "tokens should contain 13225(hello)")
 	})
 
 	t.Run("Render", func(t *testing.T) {
-		tokens, offset, err := wrapper.Render(context.Background(), &types.RenderRequest{
-			Key:              key,
+		tokens, offset, err := wrapper.Render(context.Background(), &preprocessing.RenderRequest{
 			Text:             "Hello from local tokenizer!",
 			AddSpecialTokens: true,
 		})
 		require.NoError(t, err, "Render should not return an error for local path")
 		assert.NotEmpty(t, tokens, "tokens should not be empty")
 		assert.NotNil(t, offset, "offset should not be nil")
-		assert.Contains(t, tokens, uint32(7592), "tokens should contain 7592(hello)")
+		assert.Contains(t, tokens, uint32(13225), "tokens should contain 13225(hello)")
 	})
 }
 
-// TestGetOrCreateTokenizerKeyLocalPathCaching tests that local templates are cached properly.
-func TestGetOrCreateTokenizerKeyLocalPathCaching(t *testing.T) {
+// TestInitAppLocalPathCaching tests that local templates are cached properly.
+func TestInitAppLocalPathCaching(t *testing.T) {
 	wrapper := getGlobalWrapper()
 
 	// Clear caches first
@@ -720,25 +717,22 @@ func TestGetOrCreateTokenizerKeyLocalPathCaching(t *testing.T) {
 	require.NoError(t, err, "Failed to clear caches")
 
 	testModelPath := "../../tokenization/testdata/test-model"
-	request := &preprocessing.GetOrCreateTokenizerKeyRequest{
+	request := &preprocessing.InitAppRequest{
 		Model:   testModelPath,
 		IsLocal: true,
 	}
 
-	// First call - cache miss
+	// First call - should be cache miss
 	start := time.Now()
-	key1, err := wrapper.GetOrCreateTokenizerKey(context.Background(), request)
+	err = wrapper.InitApp(context.Background(), request)
 	duration1 := time.Since(start)
 	require.NoError(t, err, "First call should not return an error")
 
-	// Second call - cache hit
+	// Second call - should be cache hit
 	start = time.Now()
-	key2, err := wrapper.GetOrCreateTokenizerKey(context.Background(), request)
+	err = wrapper.InitApp(context.Background(), request)
 	duration2 := time.Since(start)
 	require.NoError(t, err, "Second call should not return an error")
-
-	// Verify that both calls returned the same key
-	assert.Equal(t, key1, key2, "Both calls should return the same tokenizer key")
 
 	// Cache hit should be faster
 	t.Logf("First call (cache miss): %v, Second call (cache hit): %v, Speedup: %.1fx",
@@ -746,41 +740,46 @@ func TestGetOrCreateTokenizerKeyLocalPathCaching(t *testing.T) {
 	assert.Less(t, duration2, duration1, "Cache hit should be faster than cache miss")
 }
 
-// TestGetOrCreateTokenizerKeyLocalPathWithFile tests loading from a specific tokenizer.json file path.
-func TestGetOrCreateTokenizerKeyLocalPathWithFile(t *testing.T) {
+// TestInitAppLocalPathWithFile tests loading from a specific tokenizer.json file path.
+func TestInitAppLocalPathWithFile(t *testing.T) {
 	wrapper := getGlobalWrapper()
+
+	// Clear caches to ensure this test actually exercises the file path logic,
+	// not a no-op from a previously cached singleton.
+	err := preprocessing.ClearCaches(context.Background())
+	require.NoError(t, err, "Failed to clear caches")
 
 	// Test with the full path to tokenizer.json
 	//nolint:gosec // This is a test file path, not a credential
 	testTokenizerPath := "../../tokenization/testdata/test-model/tokenizer.json"
 
-	request := &preprocessing.GetOrCreateTokenizerKeyRequest{
+	request := &preprocessing.InitAppRequest{
 		Model:   testTokenizerPath,
 		IsLocal: true,
 	}
 
-	// Get the tokenizer key
-	key, err := wrapper.GetOrCreateTokenizerKey(context.Background(), request)
-	require.NoError(t, err, "GetOrCreateTokenizerKey should handle file path and extract directory")
-	assert.NotEmpty(t, key, "Returned tokenizer key should not be empty")
+	err = wrapper.InitApp(context.Background(), request)
+	require.NoError(t, err, "InitApp should handle file path and extract directory")
 
 	t.Logf("Loaded tokenizer from file path: %s", testTokenizerPath)
 }
 
-// TestGetOrCreateTokenizerKeyLocalPathNonExistent tests error handling for non-existent local paths.
-func TestGetOrCreateTokenizerKeyLocalPathNonExistent(t *testing.T) {
+// TestInitAppLocalPathNonExistent tests error handling for non-existent local paths.
+func TestInitAppLocalPathNonExistent(t *testing.T) {
 	wrapper := getGlobalWrapper()
 
-	request := &preprocessing.GetOrCreateTokenizerKeyRequest{
+	request := &preprocessing.InitAppRequest{
 		Model:   "/non/existent/path",
 		IsLocal: true,
 	}
 
+	// Clear caches to ensure accurate timing measurements
+	err := preprocessing.ClearCaches(context.Background())
+	require.NoError(t, err, "Failed to clear caches")
+
 	// This should return an error
-	key, err := wrapper.GetOrCreateTokenizerKey(context.Background(), request)
-	// Assertions
-	assert.Error(t, err, "GetOrCreateTokenizerKey should return an error for non-existent path")
-	assert.Empty(t, key, "Returned tokenizer key should be empty for non-existent path")
+	err = wrapper.InitApp(context.Background(), request)
+	assert.Error(t, err, "InitApp should return an error for non-existent path")
 	t.Logf("Expected error for non-existent path: %v", err)
 }
 

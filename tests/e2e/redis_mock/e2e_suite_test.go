@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	defaultModelName = "google-bert/bert-base-uncased"
+	defaultModelName = "Qwen/Qwen2-0.5B-Instruct"
 )
 
 // KVCacheSuite defines a testify test suite for end-to-end testing of the KVCache indexer.

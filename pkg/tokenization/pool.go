@@ -40,7 +40,6 @@ type tokenizationResponse struct {
 type Task struct {
 	RenderReq          *types.RenderChatRequest
 	RenderResponsesReq *types.RenderResponsesRequest
-	Messages           []byte
 	Prompt             string
 	ModelName          string
 	ResultCh           chan<- tokenizationResponse // nil => fire-and-forget
@@ -70,13 +69,12 @@ func (pool *Pool) EnqueueTokenization(prompt string) {
 }
 
 // Tokenize queues a task and blocks until the final result is available.
-func (pool *Pool) Tokenize(renderReq *types.RenderChatRequest, prompt string, messages []byte) ([]uint32, *MultiModalFeatures) {
+func (pool *Pool) Tokenize(renderReq *types.RenderChatRequest, prompt string) ([]uint32, *MultiModalFeatures) {
 	resultCh := make(chan tokenizationResponse, 1)
 	pool.queue.Add(&Task{
 		RenderReq: renderReq,
 		Prompt:    prompt,
 		ResultCh:  resultCh,
-		Messages:  messages,
 	})
 
 	res := <-resultCh
@@ -146,16 +144,6 @@ func (pool *Pool) workerLoop(_ int) {
 // processTask tokenizes the prompt and returns the tokens via ResultCh.
 // It sends exactly one response (success or error) if ResultCh is provided.
 func (pool *Pool) processTask(task *Task) error {
-	// If raw messages are provided, render chat template to produce a prompt string.
-	if task.Messages != nil {
-		renderedPrompt, err := pool.tokenizer.RenderChatTemplate(pool.modelName, task.Messages)
-		if err != nil {
-			log.Log.Error(err, "failed to render chat template", "messages", task.Messages)
-			return err
-		}
-		task.Prompt = renderedPrompt
-	}
-
 	var tokens []uint32
 	var features *MultiModalFeatures
 	var err error

@@ -123,9 +123,10 @@ type RenderRequest struct {
 
 // RenderResponsesRequest represents the request to render a Responses API input.
 type RenderResponsesRequest struct {
-	Input        any `json:"input"`
-	Instructions any `json:"instructions,omitempty"`
-	Tools        any `json:"tools,omitempty"`
+	Key          string `json:"key"`
+	Input        any    `json:"input"`
+	Instructions any    `json:"instructions,omitempty"`
+	Tools        any    `json:"tools,omitempty"`
 }
 
 // Offset represents a character offset range with [start, end] indices.

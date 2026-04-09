@@ -390,6 +390,7 @@ func (t *CachedTokenizer) RenderResponses(
 ) ([]uint32, []types.Offset, error) {
 	ctx := context.TODO()
 
+	req.Key = t.tokenizerCacheKey
 	tokens, offsets, err := t.chatTemplateRenderer.RenderResponses(ctx, req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to render responses: %w", err)

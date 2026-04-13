@@ -134,4 +134,8 @@ elif [[ "$ARCH_TYPE" == "apple_silicon" ]]; then
     $PYTHON_BIN -m pip install -e .
 fi
 
+# 7. Install audio dependencies (required for vLLM multimodal audio_url / input_audio inputs)
+# Not pulled in by vLLM's CPU wheel; vLLM declares them under the '[audio]' extra.
+$PYTHON_BIN -m pip install soundfile librosa
+
 echo "✅ vLLM CPU build and installation completed for $OS $ARCH."

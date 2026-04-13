@@ -7,12 +7,12 @@ PROD_VERSION ?= 0.0.0
 IMAGE_TAG_BASE ?= ghcr.io/llm-d/$(PROJECT_NAME)
 IMG = $(IMAGE_TAG_BASE):$(DEV_VERSION)
 NAMESPACE ?= hc4ai-operator
-VLLM_VERSION := 0.15.0
+VLLM_VERSION := 0.18.1
 # Set to 1 to build vLLM from source (required if pre-built wheels don't work on your CPU)
 VLLM_BUILD_FROM_SOURCE ?= 0
 # Custom vLLM repo and branch (when VLLM_BRANCH is set, source build is forced)
 VLLM_REPO ?= https://github.com/moreh-dev/vllm.git
-VLLM_BRANCH ?= response-render-0150
+VLLM_BRANCH ?= add-responses-render-endpoint
 
 TARGETOS ?= $(shell go env GOOS)
 TARGETARCH ?= $(shell go env GOARCH)

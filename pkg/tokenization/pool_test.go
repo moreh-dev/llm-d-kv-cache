@@ -66,11 +66,6 @@ func (m *MockTokenizer) Render(prompt string) ([]uint32, []types.Offset, error) 
 	return tokens, offsets, args.Error(2)
 }
 
-func (m *MockTokenizer) RenderChatTemplate(model string, messages []byte) (string, error) {
-	args := m.Called(model, messages)
-	return args.String(0), args.Error(1)
-}
-
 func (m *MockTokenizer) RenderResponses(req *types.RenderResponsesRequest) ([]uint32, []types.Offset, error) {
 	args := m.Called(req)
 	tokenIface := args.Get(0)

@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache/kvblock"
+	preprocessing "github.com/llm-d/llm-d-kv-cache/pkg/preprocessing/chat_completions"
 	"github.com/llm-d/llm-d-kv-cache/pkg/tokenization"
 	types "github.com/llm-d/llm-d-kv-cache/pkg/tokenization/types"
 )

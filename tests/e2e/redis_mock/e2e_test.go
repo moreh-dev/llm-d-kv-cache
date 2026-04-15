@@ -318,7 +318,7 @@ func (s *KVCacheSuite) TestChatCompletionsE2E() {
 	fakePodList := []string{s.Pod1IP}
 
 	// First lookup - should return no scores initially.
-	pods, err := s.indexer.GetPodScores(s.ctx, nil, nil, flattenedPrompt, nil, "ibm-granite/granite-3.3-8b-instruct", []string{s.Pod1IP})
+	pods, err := s.indexer.GetPodScores(s.ctx, nil, nil, flattenedPrompt, "ibm-granite/granite-3.3-8b-instruct", []string{s.Pod1IP})
 	s.Require().NoError(err)
 	s.T().Logf("First lookup - Received pod scores: %+v", pods)
 	s.Empty(pods, "expected no pod scores on first lookup")
@@ -327,7 +327,7 @@ func (s *KVCacheSuite) TestChatCompletionsE2E() {
 	s.addEntriesToIndex(engineKeys, requestKeys, fakePodList)
 
 	// Second lookup - should return scores.
-	pods, err = s.indexer.GetPodScores(s.ctx, nil, nil, flattenedPrompt, nil, "ibm-granite/granite-3.3-8b-instruct", []string{s.Pod1IP})
+	pods, err = s.indexer.GetPodScores(s.ctx, nil, nil, flattenedPrompt, "ibm-granite/granite-3.3-8b-instruct", []string{s.Pod1IP})
 	s.Require().NoError(err)
 	s.T().Logf("Second lookup - Received pod scores: %+v", pods)
 	s.Len(pods, 1, "expected one pod score")
@@ -395,7 +395,7 @@ func (s *KVCacheSuite) TestLongChatCompletionsE2E() {
 	fakePodList := []string{s.Pod1IP}
 
 	// First lookup.
-	pods, err := s.indexer.GetPodScores(s.ctx, nil, nil, flattenedPrompt, nil, "ibm-granite/granite-3.3-8b-instruct", []string{s.Pod1IP})
+	pods, err := s.indexer.GetPodScores(s.ctx, nil, nil, flattenedPrompt, "ibm-granite/granite-3.3-8b-instruct", []string{s.Pod1IP})
 	s.Require().NoError(err)
 	s.T().Logf("First lookup - Received pod scores: %+v", pods)
 	s.Empty(pods, "expected no pod scores on first lookup")
@@ -404,7 +404,7 @@ func (s *KVCacheSuite) TestLongChatCompletionsE2E() {
 	s.addEntriesToIndex(engineKeys, requestKeys, fakePodList)
 
 	// Second lookup.
-	pods, err = s.indexer.GetPodScores(s.ctx, nil, nil, flattenedPrompt, nil, "ibm-granite/granite-3.3-8b-instruct", []string{s.Pod1IP})
+	pods, err = s.indexer.GetPodScores(s.ctx, nil, nil, flattenedPrompt, "ibm-granite/granite-3.3-8b-instruct", []string{s.Pod1IP})
 	s.Require().NoError(err)
 	s.T().Logf("Second lookup - Received pod scores: %+v", pods)
 	s.Len(pods, 1, "expected one pod score")

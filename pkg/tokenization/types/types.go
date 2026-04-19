@@ -138,9 +138,18 @@ type RenderResponsesRequest struct {
 // Offset represents a character offset range with [start, end] indices.
 type Offset [2]uint
 
+// MMPlaceholderWire is the JSON wire format for vLLM's PlaceholderRange
+// (vllm/multimodal/inputs.py). Offsets are in prompt tokens.
+type MMPlaceholderWire struct {
+	Offset int `json:"offset"`
+	Length int `json:"length"`
+}
+
 type RenderResponse struct {
-	TokenIDs       []uint32 `json:"input_ids"`
-	OffsetMappings []Offset `json:"offset_mapping"`
+	TokenIDs       []uint32                       `json:"input_ids"`
+	OffsetMappings []Offset                       `json:"offset_mapping"`
+	MMHashes       map[string][]string            `json:"mm_hashes,omitempty"`
+	MMPlaceholders map[string][]MMPlaceholderWire `json:"mm_placeholders,omitempty"`
 }
 
 // DeepCopy creates a deep copy of the RenderChatRequest.

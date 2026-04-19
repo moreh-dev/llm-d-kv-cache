@@ -369,7 +369,7 @@ func (t *CachedTokenizer) RenderChat(
 // in uds_tokenizer.go so downstream consumers see the same shape regardless
 // of tokenizer path.
 func buildMultiModalFeaturesFromWire(resp *types.RenderResponse) *MultiModalFeatures {
-	if len(resp.MMHashes) == 0 {
+	if resp == nil || len(resp.MMHashes) == 0 {
 		return nil
 	}
 	placeholders := make(map[string][]kvblock.PlaceholderRange, len(resp.MMPlaceholders))

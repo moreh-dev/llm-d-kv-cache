@@ -479,3 +479,43 @@ func TestBuildMultiModalFeaturesFromWire_PreservesOrder(t *testing.T) {
 		assert.Equal(t, want[i], r, "range[%d]", i)
 	}
 }
+
+func TestBuildMultiModalFeaturesFromWire_NilResponse(t *testing.T) {
+	assert.Nil(t, buildMultiModalFeaturesFromWire(nil), "nil response must yield nil")
+}
+
+func TestBuildMultiModalFeaturesFromWire_HashesWithoutPlaceholders(t *testing.T) {
+	resp := &types.RenderResponse{
+		MMHashes: map[string][]string{"image": {"h1"}},
+		// MMPlaceholders intentionally nil — pins the contract that the
+		// helper returns a non-nil features struct with an empty placeholder
+		// map in this malformed-but-survivable case.
+	}
+	feats := buildMultiModalFeaturesFromWire(resp)
+	require.NotNil(t, feats)
+	assert.Equal(t, []string{"h1"}, feats.MMHashes["image"])
+	assert.NotNil(t, feats.MMPlaceholders)
+	assert.Empty(t, feats.MMPlaceholders)
+}
+
+func TestBuildMultiModalFeaturesFromWire_MultipleModalities(t *testing.T) {
+	resp := &types.RenderResponse{
+		MMHashes: map[string][]string{
+			"image": {"img-1", "img-2"},
+			"audio": {"audio-1"},
+		},
+		MMPlaceholders: map[string][]types.MMPlaceholderWire{
+			"image": {{Offset: 0, Length: 4}, {Offset: 8, Length: 4}},
+			"audio": {{Offset: 12, Length: 2}},
+		},
+	}
+	feats := buildMultiModalFeaturesFromWire(resp)
+	require.NotNil(t, feats)
+	assert.Equal(t, []string{"img-1", "img-2"}, feats.MMHashes["image"])
+	assert.Equal(t, []string{"audio-1"}, feats.MMHashes["audio"])
+	require.Len(t, feats.MMPlaceholders["image"], 2)
+	require.Len(t, feats.MMPlaceholders["audio"], 1)
+	assert.Equal(t, kvblock.PlaceholderRange{Offset: 0, Length: 4}, feats.MMPlaceholders["image"][0])
+	assert.Equal(t, kvblock.PlaceholderRange{Offset: 8, Length: 4}, feats.MMPlaceholders["image"][1])
+	assert.Equal(t, kvblock.PlaceholderRange{Offset: 12, Length: 2}, feats.MMPlaceholders["audio"][0])
+}

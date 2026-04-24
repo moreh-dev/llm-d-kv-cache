@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache/kvblock"
 	types "github.com/llm-d/llm-d-kv-cache/pkg/tokenization/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -427,4 +428,94 @@ func TestDefaultLocalTokenizerConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildMultiModalFeaturesFromWire_TextOnly(t *testing.T) {
+	resp := &types.RenderResponse{
+		TokenIDs:       []uint32{1, 2, 3},
+		OffsetMappings: []types.Offset{{0, 1}, {1, 2}, {2, 3}},
+	}
+	feats := buildMultiModalFeaturesFromWire(resp)
+	assert.Nil(t, feats, "text-only response must yield nil MultiModalFeatures")
+}
+
+func TestBuildMultiModalFeaturesFromWire_Multimodal(t *testing.T) {
+	resp := &types.RenderResponse{
+		TokenIDs: []uint32{10, 11, 12, 13},
+		MMHashes: map[string][]string{
+			"image": {"h1", "h2"},
+		},
+		MMPlaceholders: map[string][]types.MMPlaceholderWire{
+			"image": {{Offset: 0, Length: 2}, {Offset: 2, Length: 2}},
+		},
+	}
+	feats := buildMultiModalFeaturesFromWire(resp)
+	require.NotNil(t, feats)
+	assert.Equal(t, []string{"h1", "h2"}, feats.MMHashes["image"])
+	require.Len(t, feats.MMPlaceholders["image"], 2)
+	assert.Equal(t, kvblock.PlaceholderRange{Offset: 0, Length: 2}, feats.MMPlaceholders["image"][0])
+	assert.Equal(t, kvblock.PlaceholderRange{Offset: 2, Length: 2}, feats.MMPlaceholders["image"][1])
+}
+
+func TestBuildMultiModalFeaturesFromWire_PreservesOrder(t *testing.T) {
+	resp := &types.RenderResponse{
+		MMHashes: map[string][]string{
+			"image": {"A", "B", "C"},
+		},
+		MMPlaceholders: map[string][]types.MMPlaceholderWire{
+			"image": {{Offset: 5, Length: 1}, {Offset: 10, Length: 1}, {Offset: 20, Length: 1}},
+		},
+	}
+	feats := buildMultiModalFeaturesFromWire(resp)
+	require.NotNil(t, feats)
+	ranges := feats.MMPlaceholders["image"]
+	require.Len(t, ranges, 3)
+	want := []kvblock.PlaceholderRange{
+		{Offset: 5, Length: 1},
+		{Offset: 10, Length: 1},
+		{Offset: 20, Length: 1},
+	}
+	for i, r := range ranges {
+		assert.Equal(t, want[i], r, "range[%d]", i)
+	}
+}
+
+func TestBuildMultiModalFeaturesFromWire_NilResponse(t *testing.T) {
+	assert.Nil(t, buildMultiModalFeaturesFromWire(nil), "nil response must yield nil")
+}
+
+func TestBuildMultiModalFeaturesFromWire_HashesWithoutPlaceholders(t *testing.T) {
+	resp := &types.RenderResponse{
+		MMHashes: map[string][]string{"image": {"h1"}},
+		// MMPlaceholders intentionally nil — pins the contract that the
+		// helper returns a non-nil features struct with an empty placeholder
+		// map in this malformed-but-survivable case.
+	}
+	feats := buildMultiModalFeaturesFromWire(resp)
+	require.NotNil(t, feats)
+	assert.Equal(t, []string{"h1"}, feats.MMHashes["image"])
+	assert.NotNil(t, feats.MMPlaceholders)
+	assert.Empty(t, feats.MMPlaceholders)
+}
+
+func TestBuildMultiModalFeaturesFromWire_MultipleModalities(t *testing.T) {
+	resp := &types.RenderResponse{
+		MMHashes: map[string][]string{
+			"image": {"img-1", "img-2"},
+			"audio": {"audio-1"},
+		},
+		MMPlaceholders: map[string][]types.MMPlaceholderWire{
+			"image": {{Offset: 0, Length: 4}, {Offset: 8, Length: 4}},
+			"audio": {{Offset: 12, Length: 2}},
+		},
+	}
+	feats := buildMultiModalFeaturesFromWire(resp)
+	require.NotNil(t, feats)
+	assert.Equal(t, []string{"img-1", "img-2"}, feats.MMHashes["image"])
+	assert.Equal(t, []string{"audio-1"}, feats.MMHashes["audio"])
+	require.Len(t, feats.MMPlaceholders["image"], 2)
+	require.Len(t, feats.MMPlaceholders["audio"], 1)
+	assert.Equal(t, kvblock.PlaceholderRange{Offset: 0, Length: 4}, feats.MMPlaceholders["image"][0])
+	assert.Equal(t, kvblock.PlaceholderRange{Offset: 8, Length: 4}, feats.MMPlaceholders["image"][1])
+	assert.Equal(t, kvblock.PlaceholderRange{Offset: 12, Length: 2}, feats.MMPlaceholders["audio"][0])
 }

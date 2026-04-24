@@ -191,59 +191,56 @@ def get_or_create_tokenizer_key(request_json):
 
 def render_chat(request_json):
     """
-    Render a chat template using the vllm library.
-    This function is aligned with the Go cgo_functions.go structs.
-
-    Args:
-        request_json (str): JSON string containing the request parameters:
-            - key (str): The tokenizer cache key
-            - conversation (list): List of message dicts, each with 'role' and 'content' keys
-            - chat_template (str, optional): The template to use
-            - tools (list, optional): Tool schemas
-            - documents (list, optional): Document schemas
-            - return_assistant_tokens_mask (bool, optional): Whether to return assistant tokens mask
-            - continue_final_message (bool, optional): Whether to continue final message
-            - add_generation_prompt (bool, optional): Whether to add generation prompt
-            - chat_template_kwargs (dict, optional): Additional rendering variables
-
-    Returns:
-        JSON string containing:
-            - input_ids (list of int): The list of token IDs.
-            - offset_mapping (list): Always empty. Offset mappings are not supported
-              by vLLM's render_chat_request API.
+    Render a chat template using vLLM 0.18's OpenAIServingRender.
+    Returns JSON with input_ids (expanded to match engine's mm placeholder
+    tokenization), offset_mapping (empty — render path doesn't emit byte
+    offsets), and for multimodal inputs mm_hashes + mm_placeholders
+    extracted from GenerateRequest.features.
     """
-
     try:
-        # Parse the JSON request
         request = json.loads(request_json)
         key = request.pop("key")
         app = _app_cache.get(key)
         if app is None:
             raise RuntimeError(f"App with key {key} not found in cache")
 
-        # Get template_vars and spread them as individual arguments
         template_vars = request.pop("chat_template_kwargs", {})
         request.update(template_vars)
 
         # Remove model since it's already set in the app state
         request.pop("model", None)
 
-        # Convert conversation to messages for ChatCompletionRequest
         if "conversation" in request:
             request["messages"] = request.pop("conversation")
 
         result = _run_async(
-            app.state.openai_serving_chat.render_chat_request(
+            app.state.openai_serving_render.render_chat_request(
                 ChatCompletionRequest(**request)
             )
         )
         if isinstance(result, ErrorResponse):
             raise RuntimeError(f"Render error: {result.error.message}")
-        _, engine_prompts = result
-        if not engine_prompts:
-            raise RuntimeError("render_chat_request returned empty engine_prompts")
-        token_ids = engine_prompts[0]["prompt_token_ids"]
-        return json.dumps({"input_ids": list(token_ids), "offset_mapping": []})
+
+        # result is a GenerateRequest
+        token_ids = list(result.token_ids)
+        out = {"input_ids": token_ids, "offset_mapping": []}
+        features = getattr(result, "features", None)
+        if features is not None:
+            mm_hashes = getattr(features, "mm_hashes", None) or {}
+            mm_placeholders = getattr(features, "mm_placeholders", None) or {}
+            if mm_hashes:
+                out["mm_hashes"] = {
+                    modality: list(hashes) for modality, hashes in mm_hashes.items()
+                }
+            if mm_placeholders:
+                out["mm_placeholders"] = {
+                    modality: [
+                        {"offset": int(p.offset), "length": int(p.length)}
+                        for p in ranges
+                    ]
+                    for modality, ranges in mm_placeholders.items()
+                }
+        return json.dumps(out)
 
     except Exception as e:
         raise RuntimeError(

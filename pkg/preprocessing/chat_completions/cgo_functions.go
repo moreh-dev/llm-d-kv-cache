@@ -122,42 +122,39 @@ func (w *ChatTemplatingProcessor) GetOrCreateTokenizerKey(
 }
 
 // RenderChat renders a chat template by calling Py_CallRenderChat, which invokes
-// the Python chat_render wrapper. Returns token IDs and offset mappings from the JSON response.
-func (w *ChatTemplatingProcessor) RenderChat(ctx context.Context, //nolint:gocritic // unnamedResult
+// the Python render_chat wrapper. Returns the parsed RenderResponse, which
+// includes optional mm_hashes / mm_placeholders for multimodal inputs.
+func (w *ChatTemplatingProcessor) RenderChat(ctx context.Context,
 	req *RenderChatRequest,
-) ([]uint32, []Offset, error) {
+) (*RenderResponse, error) {
 	traceLogger := log.FromContext(ctx).V(logging.TRACE).WithName("chatRender")
 
 	if req == nil {
 		traceLogger.Error(nil, "Received nil request")
-		return nil, nil, fmt.Errorf("received nil request")
+		return nil, fmt.Errorf("received nil request")
 	}
 
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		traceLogger.Error(err, "Failed to marshal request")
-		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	// Call the cached Python function
 	cJSONString := C.CString(string(reqJSON))
 	defer C.free(unsafe.Pointer(cJSONString))
 	cResult := C.Py_CallRenderChat(cJSONString)
 	if cResult == nil {
 		traceLogger.Error(nil, "C function returned nil")
-		return nil, nil, fmt.Errorf("python render_chat failed")
+		return nil, fmt.Errorf("python render_chat failed")
 	}
 	defer C.free(unsafe.Pointer(cResult))
 	resultJSON := C.GoString(cResult)
 
-	// Parse the response
 	var response RenderResponse
-	err = json.Unmarshal([]byte(resultJSON), &response)
-	if err != nil {
+	if err := json.Unmarshal([]byte(resultJSON), &response); err != nil {
 		traceLogger.Error(err, "Failed to unmarshal response")
-		return nil, nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-
-	return response.TokenIDs, response.OffsetMappings, nil
+	return &response, nil
 }
 
 // Render RenderedString.

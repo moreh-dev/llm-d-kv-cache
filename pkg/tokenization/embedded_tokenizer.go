@@ -29,6 +29,7 @@ import (
 
 	"go.uber.org/multierr"
 
+	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache/kvblock"
 	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache/metrics"
 	preprocessing "github.com/llm-d/llm-d-kv-cache/pkg/preprocessing/chat_completions"
 	types "github.com/llm-d/llm-d-kv-cache/pkg/tokenization/types"
@@ -355,12 +356,34 @@ func (t *CachedTokenizer) RenderChat(
 	ctx := context.TODO()
 
 	req.Key = t.tokenizerCacheKey
-	tokens, _, err := t.chatTemplateRenderer.RenderChat(ctx, req)
+	resp, err := t.chatTemplateRenderer.RenderChat(ctx, req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to render chat template: %w", err)
 	}
+	return resp.TokenIDs, buildMultiModalFeaturesFromWire(resp), nil
+}
 
-	return tokens, nil, nil
+// buildMultiModalFeaturesFromWire converts the CGO wire format into the
+// domain MultiModalFeatures type. Returns nil for text-only responses
+// (where MMHashes is absent). Mirrors the semantics of convertProtoFeatures
+// in uds_tokenizer.go so downstream consumers see the same shape regardless
+// of tokenizer path.
+func buildMultiModalFeaturesFromWire(resp *types.RenderResponse) *MultiModalFeatures {
+	if resp == nil || len(resp.MMHashes) == 0 {
+		return nil
+	}
+	placeholders := make(map[string][]kvblock.PlaceholderRange, len(resp.MMPlaceholders))
+	for modality, wires := range resp.MMPlaceholders {
+		ranges := make([]kvblock.PlaceholderRange, len(wires))
+		for i, w := range wires {
+			ranges[i] = kvblock.PlaceholderRange{Offset: w.Offset, Length: w.Length}
+		}
+		placeholders[modality] = ranges
+	}
+	return &MultiModalFeatures{
+		MMHashes:       resp.MMHashes,
+		MMPlaceholders: placeholders,
+	}
 }
 
 // Render tokenizes the given prompt and returns token IDs with offset mappings.

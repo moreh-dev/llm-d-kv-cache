@@ -30,6 +30,14 @@ else
     exit 1
 fi
 
+# Use sudo for root-only operations when running as non-root.
+SUDO=""
+if [ "$(id -u)" != "0" ]; then
+    if command -v sudo &> /dev/null; then
+        SUDO="sudo"
+    fi
+fi
+
 # 3. Check and install Python requirements (runtime)
 REQUIRED_PKGS=(cmake wheel packaging ninja setuptools-scm numpy)
 TO_INSTALL=()
@@ -84,20 +92,26 @@ if [[ "$ARCH_TYPE" == "x86_64" || "$ARCH_TYPE" == "aarch64" ]]; then
     if [[ ${#INSTALL_SYS_PKGS[@]} -gt 0 ]]; then
         echo "[INFO] Installing system packages: ${INSTALL_SYS_PKGS[*]}"
         if [[ "$PKG_MANAGER" == "apt" ]]; then
-            apt-get update
-            apt-get install -y "${INSTALL_SYS_PKGS[@]}"
+            $SUDO apt-get update
+            $SUDO apt-get install -y "${INSTALL_SYS_PKGS[@]}"
         elif [[ "$PKG_MANAGER" == "dnf" ]]; then
-            dnf install -y "${INSTALL_SYS_PKGS[@]}"
+            $SUDO dnf install -y "${INSTALL_SYS_PKGS[@]}"
         elif [[ "$PKG_MANAGER" == "yum" ]]; then
-            yum install -y "${INSTALL_SYS_PKGS[@]}"
+            $SUDO yum install -y "${INSTALL_SYS_PKGS[@]}"
         fi
     else
         echo "[SKIP] Build dependencies already installed."
     fi
 
-    # Ensure gcc-12 is set as the default gcc (Debian/Ubuntu only)
-    if [[ "$PKG_MANAGER" == "apt" ]] && command -v update-alternatives &> /dev/null && ! gcc --version | grep -q 'gcc-12'; then
-        update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 10 --slave /usr/bin/g++ g++ /usr/bin/g++-12
+    # Ensure gcc-12 is set as the default gcc (Debian/Ubuntu only).
+    # Per https://docs.vllm.ai/en/stable/getting_started/installation/cpu/#build-wheel-from-source
+    if [[ "$PKG_MANAGER" == "apt" ]] && command -v update-alternatives &> /dev/null; then
+        GCC_MAJOR=$(gcc -dumpversion 2>/dev/null | cut -d. -f1)
+        if [[ "$GCC_MAJOR" != "12" ]]; then
+            $SUDO update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 10 --slave /usr/bin/g++ g++ /usr/bin/g++-12
+        else
+            echo "[SKIP] gcc is already version $GCC_MAJOR (default)."
+        fi
     fi
 fi
 
@@ -116,6 +130,9 @@ else
     git checkout tags/$VLLM_TAG
 fi
 
+if [ -f requirements/build/cpu.txt ]; then
+    $PYTHON_BIN -m pip install -v -r requirements/build/cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
+fi
 $PYTHON_BIN -m pip install -v -r requirements/cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # 6. Build wheel from source (actual build)

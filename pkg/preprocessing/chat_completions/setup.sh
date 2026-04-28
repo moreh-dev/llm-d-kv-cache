@@ -119,16 +119,13 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VLLM_SRC_DIR="$SCRIPT_DIR/vllm_source"
 if [ ! -d "$VLLM_SRC_DIR" ]; then
-    git clone $VLLM_REPO "$VLLM_SRC_DIR"
+    if [ -n "$VLLM_BRANCH" ]; then
+        git clone --depth=1 --single-branch --branch "$VLLM_BRANCH" "$VLLM_REPO" "$VLLM_SRC_DIR"
+    else
+        git clone --depth=1 --single-branch --branch "$VLLM_TAG" "$VLLM_REPO" "$VLLM_SRC_DIR"
+    fi
 fi
 cd "$VLLM_SRC_DIR"
-if [ -n "$VLLM_BRANCH" ]; then
-    git fetch origin "$VLLM_BRANCH"
-    git checkout "$VLLM_BRANCH"
-else
-    git fetch --tags
-    git checkout tags/$VLLM_TAG
-fi
 
 if [ -f requirements/build/cpu.txt ]; then
     $PYTHON_BIN -m pip install -v -r requirements/build/cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu

@@ -54,7 +54,6 @@ const (
 	defaultZMQTopic    = "kv@"
 	defaultConcurrency = 4
 
-	pythonHashSeed  = "PYTHONHASHSEED"
 	blockSizeEnvVar = "BLOCK_SIZE"
 
 	envHTTPPort     = "HTTP_PORT"
@@ -203,10 +202,6 @@ func getKVCacheIndexerConfig() (*kvcache.Config, error) {
 
 func getTokenProcessorConfig() *kvblock.TokenProcessorConfig {
 	config := kvblock.DefaultTokenProcessorConfig()
-	hashSeed := os.Getenv(pythonHashSeed)
-	if hashSeed != "" {
-		config.HashSeed = hashSeed
-	}
 
 	blockSize, err := strconv.Atoi(os.Getenv(blockSizeEnvVar))
 	if err == nil && blockSize >= 0 {

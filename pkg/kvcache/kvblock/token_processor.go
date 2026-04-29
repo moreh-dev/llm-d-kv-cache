@@ -33,20 +33,19 @@ const defaultBlockSize = 16
 
 // TokenProcessorConfig holds the configuration for the token processor.
 type TokenProcessorConfig struct {
-	BlockSize int `json:"blockSize"`
-	// HashSeed is used to prefix initial hash chunks, similarly to vLLM's NONE_HASH.
-	// This should be aligned with vLLM's `PYTHONHASHSEED` environment variable.
-	// The system's deployer is responsible for aligning the vLLM deployments
-	// with the same seed value.
-	HashSeed string `json:"hashSeed"`
-	initHash uint64 // cache once
+	// BlockSize is the number of tokens per KV-cache block. This MUST match
+	// the `--block-size` argument the vLLM serving runtime is started with on
+	// the inference pods. If the two disagree, prefix-cache hashes computed
+	// here will not align with the blocks vLLM actually allocates, and any
+	// prefix-cache routing decision based on these hashes will be incorrect.
+	BlockSize int    `json:"blockSize"`
+	initHash  uint64 // cache once
 }
 
 // DefaultTokenProcessorConfig returns the default configuration for the token processor.
 func DefaultTokenProcessorConfig() *TokenProcessorConfig {
 	return &TokenProcessorConfig{
 		BlockSize: defaultBlockSize,
-		HashSeed:  "",
 	}
 }
 
@@ -90,7 +89,6 @@ func NewChunkedTokenDatabase(config *TokenProcessorConfig) (TokenProcessor, erro
 	if config.initHash == 0 {
 		// Create initial hash
 		h := fnv.New64a()
-		_, _ = h.Write([]byte(config.HashSeed))
 		config.initHash = h.Sum64()
 	}
 

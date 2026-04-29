@@ -76,7 +76,6 @@ func TestNewChunkedTokenDatabase_Validation(t *testing.T) {
 func TestGetInitHash_ConsistentHashesForSameModel(t *testing.T) {
 	config := &kvblock.TokenProcessorConfig{
 		BlockSize: 16,
-		HashSeed:  "test-seed",
 	}
 
 	processor, err := kvblock.NewChunkedTokenDatabase(config)
@@ -106,7 +105,6 @@ func TestGetInitHash_ConsistentHashesForSameModel(t *testing.T) {
 func TestGetInitHash_DifferentHashesForDifferentModels(t *testing.T) {
 	config := &kvblock.TokenProcessorConfig{
 		BlockSize: 16,
-		HashSeed:  "test-seed",
 	}
 
 	processor, err := kvblock.NewChunkedTokenDatabase(config)
@@ -147,52 +145,9 @@ func TestGetInitHash_DifferentHashesForDifferentModels(t *testing.T) {
 	}
 }
 
-func TestGetInitHash_DifferentSeedsProduceDifferentHashes(t *testing.T) {
-	modelName := "test-model"
-	tokens := []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-
-	// Test with different seeds
-	seeds := []string{
-		"",
-		"seed1",
-		"seed2",
-		"different-seed",
-		"123456",
-	}
-
-	hashes := make(map[string]uint64)
-
-	for _, seed := range seeds {
-		config := &kvblock.TokenProcessorConfig{
-			BlockSize: 16,
-			HashSeed:  seed,
-		}
-
-		processor, err := kvblock.NewChunkedTokenDatabase(config)
-		require.NoError(t, err)
-		keys, err := processor.TokensToKVBlockKeys(kvblock.EmptyBlockHash, tokens, modelName, nil)
-		require.NoError(t, err)
-		require.NotEmpty(t, keys, "Should generate keys for seed: %s", seed)
-
-		hashes[seed] = uint64(keys[0])
-		assert.NotZero(t, hashes[seed], "Hash should not be zero for seed: %s", seed)
-	}
-
-	// Verify all hashes are different
-	seenHashes := make(map[uint64]string)
-	for seed, hash := range hashes {
-		if existingSeed, exists := seenHashes[hash]; exists {
-			t.Errorf("Hash collision detected: seeds '%s' and '%s' produce the same initial hash %d for model %s",
-				seed, existingSeed, hash, modelName)
-		}
-		seenHashes[hash] = seed
-	}
-}
-
 func TestGetInitHash_ConcurrentAccess(t *testing.T) {
 	config := &kvblock.TokenProcessorConfig{
 		BlockSize: 16,
-		HashSeed:  "test-seed",
 	}
 
 	processor, err := kvblock.NewChunkedTokenDatabase(config)
@@ -241,7 +196,6 @@ func TestGetInitHash_ConcurrentAccess(t *testing.T) {
 func TestGetInitHash_Deterministic(t *testing.T) {
 	// Test that the same configuration always produces the same hash
 	modelName := "deterministic-test"
-	seed := "deterministic-seed"
 	tokens := []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 
 	var hashes []uint64
@@ -250,7 +204,6 @@ func TestGetInitHash_Deterministic(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		config := &kvblock.TokenProcessorConfig{
 			BlockSize: 16,
-			HashSeed:  seed,
 		}
 
 		processor, err := kvblock.NewChunkedTokenDatabase(config)

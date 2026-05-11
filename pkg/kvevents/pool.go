@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache"
 	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache/kvblock"
 	"github.com/llm-d/llm-d-kv-cache/pkg/utils/logging"
 )
@@ -51,6 +52,9 @@ type Config struct {
 	// PodDiscoveryConfig holds the configuration for pod discovery.
 	// Only used when DiscoverPods is true.
 	PodDiscoveryConfig *PodDiscoveryConfig `json:"podDiscoveryConfig,omitempty"`
+	// ModelConfigs defines model-specific settings (HMA, attention groups, etc.).
+	// Pool resolves HMA models from this at construction; nil means all models are simple.
+	ModelConfigs []*kvcache.ModelConfig `json:"modelConfigs,omitempty"`
 }
 
 // PodDiscoveryConfig holds configuration for the Kubernetes pod reconciler.
@@ -93,6 +97,7 @@ type Pool struct {
 	index          kvblock.Index
 	tokenProcessor kvblock.TokenProcessor
 	adapter        EngineAdapter
+	hmaModels      map[string]bool // resolved at construction from ModelConfigs
 	wg             sync.WaitGroup
 }
 
@@ -112,6 +117,7 @@ func NewPool(cfg *Config, index kvblock.Index, tokenProcessor kvblock.TokenProce
 		index:          index,
 		tokenProcessor: tokenProcessor,
 		adapter:        adapter,
+		hmaModels:      kvcache.BuildHMAModels(cfg.ModelConfigs),
 	}
 
 	for i := 0; i < p.concurrency; i++ {
@@ -229,8 +235,16 @@ func (p *Pool) processEventBatch(ctx context.Context, batch *EventBatch, podIden
 				effectiveModelName = *ev.LoraName
 			}
 
-			// Create PodEntry for this specific event's device tier
-			podEntries := []kvblock.PodEntry{{PodIdentifier: podIdentifier, DeviceTier: deviceTier}}
+			var storedGroups uint32
+			if p.hmaModels[effectiveModelName] {
+				storedGroups = 1 << ev.GroupIdx
+			}
+
+			podEntries := []kvblock.PodEntry{{
+				PodIdentifier: podIdentifier,
+				DeviceTier:    deviceTier,
+				StoredGroups:  storedGroups,
+			}}
 
 			engineKeys := make([]kvblock.BlockHash, len(ev.BlockHashes))
 			for i, hash := range ev.BlockHashes {
@@ -308,8 +322,16 @@ func (p *Pool) processEventBatch(ctx context.Context, batch *EventBatch, podIden
 				deviceTier = strings.ToLower(ev.DeviceTier)
 			}
 
-			// Create PodEntry for this specific event's device tier
-			podEntries := []kvblock.PodEntry{{PodIdentifier: podIdentifier, DeviceTier: deviceTier}}
+			var storedGroups uint32
+			if p.hmaModels[modelName] {
+				storedGroups = 1 << ev.GroupIdx
+			}
+
+			podEntries := []kvblock.PodEntry{{
+				PodIdentifier: podIdentifier,
+				DeviceTier:    deviceTier,
+				StoredGroups:  storedGroups,
+			}}
 
 			// Iterate over the hashes and evict each key.
 			for _, hash := range ev.BlockHashes {

@@ -69,10 +69,6 @@ func (pool *Pool) EnqueueTokenization(prompt string) {
 }
 
 // Tokenize queues a task and blocks until the final result is available.
-// Exactly one of renderResponsesReq, renderReq, or prompt should carry the
-// payload; the others must be zero-valued. The first non-zero discriminator,
-// in order (renderResponsesReq → renderReq → prompt), determines which
-// tokenizer method handles the task.
 func (pool *Pool) Tokenize(
 	renderResponsesReq *types.RenderResponsesRequest,
 	renderReq *types.RenderChatRequest,

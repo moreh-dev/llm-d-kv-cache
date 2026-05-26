@@ -104,13 +104,13 @@ func (s *HybridPrefixCacheScorer) hybridScore(
 		states[entry.PodIdentifier] = st
 	}
 
-	for b := 1; b < len(keys); b++ {
+	for blockIdx := 1; blockIdx < len(keys); blockIdx++ {
 		if len(states) == 0 {
 			break
 		}
 
 		podGroups := make(map[string]uint32)
-		for _, entry := range keyToPods[keys[b]] {
+		for _, entry := range keyToPods[keys[blockIdx]] {
 			podGroups[entry.PodIdentifier] |= entry.StoredGroups
 		}
 
@@ -119,7 +119,7 @@ func (s *HybridPrefixCacheScorer) hybridScore(
 
 			if st.fullActive {
 				if present && groups&fullMask != 0 {
-					st.fullLastSeq = b
+					st.fullLastSeq = blockIdx
 				} else {
 					st.fullActive = false
 				}
@@ -129,7 +129,7 @@ func (s *HybridPrefixCacheScorer) hybridScore(
 				if present && groups&swaMasks[i] != 0 {
 					st.swaCount[i]++
 					if st.swaCount[i] >= info.SWAWindowBlocks[i] {
-						st.swaLastSeq[i] = b
+						st.swaLastSeq[i] = blockIdx
 					}
 				} else {
 					st.swaCount[i] = 0

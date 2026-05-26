@@ -486,4 +486,3 @@ func TestHMAModelE2E(t *testing.T) {
 	assert.Greater(t, scores[testPodA], scores[testPodB],
 		"podA with full SWA coverage should score higher than podB with SWA gap")
 }
-

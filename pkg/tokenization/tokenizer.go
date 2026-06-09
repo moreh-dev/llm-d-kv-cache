@@ -48,6 +48,11 @@ type TokenizerOptions struct {
 	TokenizerMode string `json:"tokenizerMode,omitempty"`
 	// TokenizerRevision is the revision of the tokenizer to use.
 	TokenizerRevision string `json:"tokenizerRevision,omitempty"`
+	// TrustRemoteCode allows loading tokenizers that ship custom Python code
+	// in the model repository (passed to vLLM as --trust-remote-code).
+	// Required for models like Kimi-K2 that are not yet integrated in upstream
+	// transformers. Off by default for safety.
+	TrustRemoteCode bool `json:"trustRemoteCode,omitempty"`
 }
 
 // DefaultTokenizerOptions returns the default tokenizer options.
@@ -56,5 +61,6 @@ func DefaultTokenizerOptions() TokenizerOptions {
 		Tokenizer:         "",
 		TokenizerMode:     "auto",
 		TokenizerRevision: "",
+		TrustRemoteCode:   false,
 	}
 }

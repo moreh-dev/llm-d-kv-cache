@@ -45,6 +45,7 @@ type GetOrCreateTokenizerKeyRequest struct {
 	Revision          string `json:"revision,omitempty"`
 	TokenizerRevision string `json:"tokenizer_revision,omitempty"`
 	Token             string `json:"token,omitempty"`
+	TrustRemoteCode   bool   `json:"trust_remote_code,omitempty"`
 }
 
 // Type aliases for backward compatibility - these types are now defined in tokenization/types.

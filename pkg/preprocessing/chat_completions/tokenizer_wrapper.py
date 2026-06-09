@@ -160,6 +160,7 @@ def get_or_create_tokenizer_key(request_json):
         tokenizer = request.pop("tokenizer", None)
         tokenizer_mode = request.pop("tokenizer_mode", "auto")
         tokenizer_revision = request.pop("tokenizer_revision", None)
+        trust_remote_code = request.pop("trust_remote_code", False)
 
         if is_local and os.path.isfile(model_name):
             # If it's a file path (tokenizer.json), get the directory
@@ -180,6 +181,7 @@ def get_or_create_tokenizer_key(request_json):
         args.tokenizer_mode = tokenizer_mode
         args.revision = revision
         args.tokenizer_revision = tokenizer_revision
+        args.trust_remote_code = trust_remote_code
         args.trust_request_chat_template = True
         engine_args = AsyncEngineArgs.from_cli_args(args)
         vllm_config = engine_args.create_engine_config()

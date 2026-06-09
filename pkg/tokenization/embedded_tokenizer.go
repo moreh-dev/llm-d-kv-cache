@@ -283,14 +283,16 @@ func NewCachedHFTokenizer(ctx context.Context, modelName string, config *HFToken
 	}
 
 	tokenizerCacheKey, err := chatTemplateRenderer.GetOrCreateTokenizerKey(ctx, &preprocessing.GetOrCreateTokenizerKeyRequest{
-		IsLocal:           false,
-		Model:             modelName,
-		DownloadDir:       config.TokenizersCacheDir,
-		Token:             config.HuggingFaceToken,
-		Tokenizer:         config.Tokenizer,
-		TokenizerMode:     config.TokenizerMode,
-		TokenizerRevision: config.TokenizerRevision,
-		TrustRemoteCode:   config.TrustRemoteCode,
+		IsLocal:              false,
+		Model:                modelName,
+		DownloadDir:          config.TokenizersCacheDir,
+		Token:                config.HuggingFaceToken,
+		Tokenizer:            config.Tokenizer,
+		TokenizerMode:        config.TokenizerMode,
+		TokenizerRevision:    config.TokenizerRevision,
+		TrustRemoteCode:      config.TrustRemoteCode,
+		EnableAutoToolChoice: config.EnableAutoToolChoice,
+		ToolCallParser:       config.ToolCallParser,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tokenizer with cache: %w", err)
@@ -331,12 +333,14 @@ func NewCachedLocalTokenizer(ctx context.Context, modelName string, config Local
 	}
 
 	tokenizerCacheKey, err := chatTemplater.GetOrCreateTokenizerKey(ctx, &preprocessing.GetOrCreateTokenizerKeyRequest{
-		IsLocal:           true,
-		Model:             path,
-		Tokenizer:         config.Tokenizer,
-		TokenizerMode:     config.TokenizerMode,
-		TokenizerRevision: config.TokenizerRevision,
-		TrustRemoteCode:   config.TrustRemoteCode,
+		IsLocal:              true,
+		Model:                path,
+		Tokenizer:            config.Tokenizer,
+		TokenizerMode:        config.TokenizerMode,
+		TokenizerRevision:    config.TokenizerRevision,
+		TrustRemoteCode:      config.TrustRemoteCode,
+		EnableAutoToolChoice: config.EnableAutoToolChoice,
+		ToolCallParser:       config.ToolCallParser,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get or create tokenizer key with cache: %w", err)

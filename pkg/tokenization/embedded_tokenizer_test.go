@@ -428,3 +428,39 @@ func TestDefaultLocalTokenizerConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestCachedHFTokenizer_RenderChat_ToolChoiceAuto verifies the tool-call args
+// configured on HFTokenizerConfig are forwarded to the vLLM render args so a
+// tools-bearing chat request passes the "auto" tool-choice render gate.
+func TestCachedHFTokenizer_RenderChat_ToolChoiceAuto(t *testing.T) {
+	cfg := &HFTokenizerConfig{
+		Enabled: true,
+		TokenizerOptions: TokenizerOptions{
+			EnableAutoToolChoice: true,
+			ToolCallParser:       "llama3_json",
+		},
+	}
+	tok, err := NewCachedHFTokenizer(context.Background(), "meta-llama/Llama-3.1-8B-Instruct", cfg)
+	require.NoError(t, err)
+
+	tools := []interface{}{
+		map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name": "get_weather",
+				"parameters": map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{"city": map[string]interface{}{"type": "string"}},
+				},
+			},
+		},
+	}
+	tokens, _, err := tok.RenderChat(&types.RenderChatRequest{
+		Conversation: []types.Conversation{
+			{Role: "user", Content: types.Content{Raw: "What is the weather in Tokyo?"}},
+		},
+		Tools: tools,
+	})
+	require.NoError(t, err, "tools render should pass the gate once the flags are forwarded")
+	require.NotEmpty(t, tokens)
+}

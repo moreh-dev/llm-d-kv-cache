@@ -37,15 +37,17 @@ import (
 )
 
 type GetOrCreateTokenizerKeyRequest struct {
-	IsLocal           bool   `json:"is_local,omitempty"`
-	DownloadDir       string `json:"download_dir,omitempty"`
-	Model             string `json:"model"`
-	Tokenizer         string `json:"tokenizer,omitempty"`
-	TokenizerMode     string `json:"tokenizer_mode,omitempty"`
-	Revision          string `json:"revision,omitempty"`
-	TokenizerRevision string `json:"tokenizer_revision,omitempty"`
-	Token             string `json:"token,omitempty"`
-	TrustRemoteCode   bool   `json:"trust_remote_code,omitempty"`
+	IsLocal              bool   `json:"is_local,omitempty"`
+	DownloadDir          string `json:"download_dir,omitempty"`
+	Model                string `json:"model"`
+	Tokenizer            string `json:"tokenizer,omitempty"`
+	TokenizerMode        string `json:"tokenizer_mode,omitempty"`
+	Revision             string `json:"revision,omitempty"`
+	TokenizerRevision    string `json:"tokenizer_revision,omitempty"`
+	Token                string `json:"token,omitempty"`
+	TrustRemoteCode      bool   `json:"trust_remote_code,omitempty"`
+	EnableAutoToolChoice bool   `json:"enable_auto_tool_choice,omitempty"`
+	ToolCallParser       string `json:"tool_call_parser,omitempty"`
 }
 
 // Type aliases for backward compatibility - these types are now defined in tokenization/types.

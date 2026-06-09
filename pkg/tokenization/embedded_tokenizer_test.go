@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	preprocessing "github.com/llm-d/llm-d-kv-cache/pkg/preprocessing/chat_completions"
 	types "github.com/llm-d/llm-d-kv-cache/pkg/tokenization/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -427,4 +428,45 @@ func TestDefaultLocalTokenizerConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCachedHFTokenizer_RenderChat_ToolChoiceAuto verifies the tool-call args
+// configured on HFTokenizerConfig are forwarded to the vLLM render args so a
+// tools-bearing chat request passes the "auto" tool-choice render gate.
+func TestCachedHFTokenizer_RenderChat_ToolChoiceAuto(t *testing.T) {
+	// The tokenizer cache key is model:revision:is_local and omits the tool flags,
+	// so an earlier test that loaded testModelName without them would otherwise be
+	// reused here (stale app → gate error). Start from a clean cache.
+	require.NoError(t, preprocessing.ClearCaches(context.Background()))
+
+	cfg := &HFTokenizerConfig{
+		Enabled: true,
+		TokenizerOptions: TokenizerOptions{
+			EnableAutoToolChoice: true,
+			ToolCallParser:       "hermes",
+		},
+	}
+	tok, err := NewCachedHFTokenizer(context.Background(), testModelName, cfg)
+	require.NoError(t, err)
+
+	tools := []interface{}{
+		map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name": "get_weather",
+				"parameters": map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{"city": map[string]interface{}{"type": "string"}},
+				},
+			},
+		},
+	}
+	tokens, _, err := tok.RenderChat(&types.RenderChatRequest{
+		Conversation: []types.Conversation{
+			{Role: "user", Content: types.Content{Raw: "What is the weather in Tokyo?"}},
+		},
+		Tools: tools,
+	})
+	require.NoError(t, err, "tools render should pass the gate once the flags are forwarded")
+	require.NotEmpty(t, tokens)
 }

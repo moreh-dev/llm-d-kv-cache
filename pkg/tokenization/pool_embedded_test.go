@@ -21,6 +21,7 @@ package tokenization
 
 import (
 	"context"
+	"encoding/json"
 	"math/rand"
 	"strings"
 	"testing"
@@ -28,6 +29,29 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+// TestConfig_ToolCallFieldsPassThrough verifies the tokenizer pool Config — used
+// directly as kvcache.Config.TokenizersPoolConfig by heimdall — deserializes
+// enableAutoToolChoice/toolCallParser under hf:/local: into the embedded
+// TokenizerOptions. Guards the pass-through: no layer re-maps the config or drops
+// these fields between the YAML and NewCachedHF/LocalTokenizer.
+func TestConfig_ToolCallFieldsPassThrough(t *testing.T) {
+	const raw = `{
+		"modelName": "some/model",
+		"hf":    {"enabled": true, "enableAutoToolChoice": true, "toolCallParser": "gemma4"},
+		"local": {"enableAutoToolChoice": true, "toolCallParser": "llama3_json"}
+	}`
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(raw), &c))
+
+	require.NotNil(t, c.HFTokenizerConfig)
+	require.True(t, c.HFTokenizerConfig.EnableAutoToolChoice)
+	require.Equal(t, "gemma4", c.HFTokenizerConfig.ToolCallParser)
+
+	require.NotNil(t, c.LocalTokenizerConfig)
+	require.True(t, c.LocalTokenizerConfig.EnableAutoToolChoice)
+	require.Equal(t, "llama3_json", c.LocalTokenizerConfig.ToolCallParser)
+}
 
 const (
 	benchmarkMaxWords    = 1_000

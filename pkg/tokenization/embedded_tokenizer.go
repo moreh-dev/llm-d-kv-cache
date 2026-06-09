@@ -290,6 +290,7 @@ func NewCachedHFTokenizer(ctx context.Context, modelName string, config *HFToken
 		Tokenizer:         config.Tokenizer,
 		TokenizerMode:     config.TokenizerMode,
 		TokenizerRevision: config.TokenizerRevision,
+		TrustRemoteCode:   config.TrustRemoteCode,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tokenizer with cache: %w", err)
@@ -335,6 +336,7 @@ func NewCachedLocalTokenizer(ctx context.Context, modelName string, config Local
 		Tokenizer:         config.Tokenizer,
 		TokenizerMode:     config.TokenizerMode,
 		TokenizerRevision: config.TokenizerRevision,
+		TrustRemoteCode:   config.TrustRemoteCode,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get or create tokenizer key with cache: %w", err)

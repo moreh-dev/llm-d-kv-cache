@@ -437,10 +437,10 @@ func TestCachedHFTokenizer_RenderChat_ToolChoiceAuto(t *testing.T) {
 		Enabled: true,
 		TokenizerOptions: TokenizerOptions{
 			EnableAutoToolChoice: true,
-			ToolCallParser:       "llama3_json",
+			ToolCallParser:       "hermes",
 		},
 	}
-	tok, err := NewCachedHFTokenizer(context.Background(), "meta-llama/Llama-3.1-8B-Instruct", cfg)
+	tok, err := NewCachedHFTokenizer(context.Background(), testModelName, cfg)
 	require.NoError(t, err)
 
 	tools := []interface{}{

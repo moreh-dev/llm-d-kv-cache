@@ -7,10 +7,12 @@ fail() {
   exit 1
 }
 
-# Wait up to 60s for a pattern to appear in a log file; returns 1 on timeout.
+# Wait up to 180s for a pattern to appear in a log file; returns 1 on timeout.
+# Cold embedded-tokenizer init (download + vLLM create_engine_config for
+# Qwen2-VL-7B) alone takes ~50-60s, so 60s left no room for the demo itself.
 wait_for_log() {
   local log=$1 pattern=$2
-  for i in {1..60}; do
+  for i in {1..180}; do
     grep -q "$pattern" "$log" 2>/dev/null && return 0
     sleep 1
   done
@@ -27,7 +29,7 @@ trap 'make stop-tokenizer' EXIT
 
 # 2. Test offline example
 echo "[INFO] Running offline example..."
-timeout 60s make run-example-only offline >offline.log 2>&1 &
+timeout 180s make run-example-only offline >offline.log 2>&1 &
 pid=$!
 wait_for_log offline.log 'Events demo completed.' || { cat offline.log; fail "offline example did not complete successfully."; }
 kill -INT "$pid" 2>/dev/null || true
@@ -36,7 +38,7 @@ echo "[OK] offline example completed."
 
 # 3. Test online example
 echo "[INFO] Running online example..."
-timeout 60s make run-example-only online >online.log 2>&1 &
+timeout 180s make run-example-only online >online.log 2>&1 &
 pid=$!
 wait_for_log online.log '8080' || { cat online.log; fail "online example did not listen on 8080."; }
 kill -INT "$pid" 2>/dev/null || true

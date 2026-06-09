@@ -155,7 +155,7 @@ def get_or_create_tokenizer_key(request_json):
         model_name = request.pop("model")
         revision = request.get("revision", None)
         is_local = request.pop("is_local", False)
-        token = request.pop("token", "")
+        token = (request.pop("token", "") or "").strip() or None
         download_dir = request.pop("download_dir", None)
         tokenizer = request.pop("tokenizer", None)
         tokenizer_mode = request.pop("tokenizer_mode", "auto")

@@ -53,14 +53,26 @@ type TokenizerOptions struct {
 	// Required for models like Kimi-K2 that are not yet integrated in upstream
 	// transformers. Off by default for safety.
 	TrustRemoteCode bool `json:"trustRemoteCode,omitempty"`
+	// EnableAutoToolChoice enables vLLM "auto" tool choice during chat-template
+	// rendering (passed as --enable-auto-tool-choice). vLLM auto-promotes
+	// tool_choice to "auto" when a request carries tools, and the render path
+	// rejects "auto" unless this and ToolCallParser are set. Set together with
+	// ToolCallParser. Off by default.
+	EnableAutoToolChoice bool `json:"enableAutoToolChoice,omitempty"`
+	// ToolCallParser is the vLLM tool-call parser for the model (e.g.
+	// "llama3_json", "gemma4"; passed as --tool-call-parser). Required when
+	// EnableAutoToolChoice is set; use the model's own parser. Empty by default.
+	ToolCallParser string `json:"toolCallParser,omitempty"`
 }
 
 // DefaultTokenizerOptions returns the default tokenizer options.
 func DefaultTokenizerOptions() TokenizerOptions {
 	return TokenizerOptions{
-		Tokenizer:         "",
-		TokenizerMode:     "auto",
-		TokenizerRevision: "",
-		TrustRemoteCode:   false,
+		Tokenizer:            "",
+		TokenizerMode:        "auto",
+		TokenizerRevision:    "",
+		TrustRemoteCode:      false,
+		EnableAutoToolChoice: false,
+		ToolCallParser:       "",
 	}
 }

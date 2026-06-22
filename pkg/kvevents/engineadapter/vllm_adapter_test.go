@@ -158,6 +158,40 @@ func TestVLLMBlockStoredWithLora(t *testing.T) {
 	assert.Equal(t, [][]any{{"uuid-A", "salt"}, nil}, blockStored.ExtraKeys)
 }
 
+func TestVLLMBlockStoredWithHMAMetadata(t *testing.T) {
+	adapter := NewVLLMAdapter()
+
+	vllmEvent := []any{
+		"BlockStored",
+		[]any{uint64(700), uint64(701)},
+		uint64(699),
+		[]uint32{1, 2, 3, 4},
+		16,
+		nil,
+		"gpu",
+		nil,
+		nil,
+		uint64(1),
+		"sliding_window",
+		128,
+	}
+
+	rawBytes, err := msgpack.Marshal(vllmEvent)
+	require.NoError(t, err)
+
+	event, err := adapter.decodeVLLMEvent(rawBytes)
+	require.NoError(t, err)
+
+	blockStored, ok := event.(*kvevents.BlockStoredEvent)
+	require.True(t, ok)
+	assert.Equal(t, 16, blockStored.BlockSize)
+	require.NotNil(t, blockStored.GroupIdx)
+	assert.Equal(t, 1, *blockStored.GroupIdx)
+	assert.Equal(t, kvevents.KVCacheSpecKindSlidingWindow, blockStored.KVCacheSpecKind)
+	require.NotNil(t, blockStored.KVCacheSpecSlidingWindowSize)
+	assert.Equal(t, 128, *blockStored.KVCacheSpecSlidingWindowSize)
+}
+
 // TestDecodeVLLMEvent_BlockStoredMissingTrailingFields tests backward compatibility
 // when trailing optional fields are absent (older vLLM with omit_defaults=True).
 func TestDecodeVLLMEvent_BlockStoredMissingTrailingFields(t *testing.T) {
@@ -236,7 +270,7 @@ func TestDecodeVLLMEvent_BlockStoredMissingTrailingFields(t *testing.T) {
 func TestDecodeVLLMEvent_BlockStoredExtraTrailingFields(t *testing.T) {
 	adapter := NewVLLMAdapter()
 
-	// Simulate a future vLLM version with extra_keys and another unknown field
+	// Simulate a future vLLM version with HMA metadata plus another unknown field.
 	vllmEvent := []any{
 		"BlockStored",
 		[]any{uint64(400), uint64(401)},
@@ -247,7 +281,10 @@ func TestDecodeVLLMEvent_BlockStoredExtraTrailingFields(t *testing.T) {
 		"gpu",
 		"my-lora",
 		[]any{[]any{"extra", "keys"}}, // [8] extra_keys
-		"completely-unknown-field",    // [9] future unknown — silently ignored
+		uint64(0),                     // [9] group_idx
+		"full_attention",              // [10] kv_cache_spec_kind
+		nil,                           // [11] kv_cache_spec_sliding_window
+		"completely-unknown-field",    // [12] future unknown — silently ignored
 	}
 
 	rawBytes, err := msgpack.Marshal(vllmEvent)
@@ -267,6 +304,9 @@ func TestDecodeVLLMEvent_BlockStoredExtraTrailingFields(t *testing.T) {
 	assert.Equal(t, "my-lora", *blockStored.LoraName)
 	require.NotNil(t, blockStored.ExtraKeys)
 	assert.Equal(t, [][]any{{"extra", "keys"}}, blockStored.ExtraKeys)
+	require.NotNil(t, blockStored.GroupIdx)
+	assert.Equal(t, 0, *blockStored.GroupIdx)
+	assert.Equal(t, kvevents.KVCacheSpecKindFullAttention, blockStored.KVCacheSpecKind)
 }
 
 // TestDecodeVLLMEvent_BlockRemovedExtraTrailingFields tests forward compatibility for BlockRemoved.
@@ -277,8 +317,8 @@ func TestDecodeVLLMEvent_BlockRemovedExtraTrailingFields(t *testing.T) {
 		"BlockRemoved",
 		[]any{uint64(500)},
 		"cpu",
-		"future-field-1",
-		"future-field-2",
+		uint64(1),        // [3] group_idx
+		"future-field-1", // [4] future unknown — silently ignored
 	}
 
 	rawBytes, err := msgpack.Marshal(vllmEvent)
@@ -291,6 +331,8 @@ func TestDecodeVLLMEvent_BlockRemovedExtraTrailingFields(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, []uint64{500}, blockRemoved.BlockHashes)
 	assert.Equal(t, "cpu", blockRemoved.DeviceTier)
+	require.NotNil(t, blockRemoved.GroupIdx)
+	assert.Equal(t, 1, *blockRemoved.GroupIdx)
 }
 
 // TestDecodeVLLMEvent_BlockRemovedMissingMedium tests backward compat for BlockRemoved.
@@ -312,6 +354,98 @@ func TestDecodeVLLMEvent_BlockRemovedMissingMedium(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, []uint64{600}, blockRemoved.BlockHashes)
 	assert.Equal(t, "", blockRemoved.DeviceTier)
+	assert.Nil(t, blockRemoved.GroupIdx)
+}
+
+func TestDecodeVLLMEvent_BlockStoredInvalidHMAMetadata(t *testing.T) {
+	adapter := NewVLLMAdapter()
+
+	tests := []struct {
+		name    string
+		event   []any
+		wantErr string
+	}{
+		{
+			name: "negative group idx",
+			event: []any{
+				"BlockStored",
+				[]any{uint64(700)},
+				uint64(699),
+				[]uint32{1, 2},
+				16,
+				nil,
+				"gpu",
+				nil,
+				nil,
+				int64(-1),
+			},
+			wantErr: "group_idx",
+		},
+		{
+			name: "non-string spec kind",
+			event: []any{
+				"BlockStored",
+				[]any{uint64(700)},
+				uint64(699),
+				[]uint32{1, 2},
+				16,
+				nil,
+				"gpu",
+				nil,
+				nil,
+				uint64(0),
+				uint64(123),
+			},
+			wantErr: "kv_cache_spec_kind",
+		},
+		{
+			name: "non-numeric sliding window",
+			event: []any{
+				"BlockStored",
+				[]any{uint64(700)},
+				uint64(699),
+				[]uint32{1, 2},
+				16,
+				nil,
+				"gpu",
+				nil,
+				nil,
+				uint64(0),
+				"sliding_window",
+				"bad-window",
+			},
+			wantErr: "kv_cache_spec_sliding_window",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rawBytes, err := msgpack.Marshal(tt.event)
+			require.NoError(t, err)
+
+			_, err = adapter.decodeVLLMEvent(rawBytes)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestDecodeVLLMEvent_BlockRemovedInvalidGroupIdx(t *testing.T) {
+	adapter := NewVLLMAdapter()
+
+	vllmEvent := []any{
+		"BlockRemoved",
+		[]any{uint64(700)},
+		"gpu",
+		int64(-1),
+	}
+
+	rawBytes, err := msgpack.Marshal(vllmEvent)
+	require.NoError(t, err)
+
+	_, err = adapter.decodeVLLMEvent(rawBytes)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "group_idx")
 }
 
 func intPtr(v int) *int {
@@ -476,4 +610,116 @@ func TestVLLMEventBatch_NestedArrayEvents(t *testing.T) {
 	assert.Equal(t, uint64(9), blockStored.ParentHash)
 	assert.Equal(t, []uint32{1, 2, 3}, blockStored.Tokens)
 	assert.Equal(t, "gpu", blockStored.DeviceTier)
+}
+
+// TestVLLMParseMessage_MapEncodedBlockStored verifies the map encoding emitted
+// by newer vLLM (vllm-project/vllm#42892 dropped msgspec array_like=True):
+// events arrive as field-name maps with the tag under "type".
+func TestVLLMParseMessage_MapEncodedBlockStored(t *testing.T) {
+	adapter := NewVLLMAdapter()
+
+	groupIdx := 0
+	blockStoredEvent := map[string]any{
+		"type":              "BlockStored",
+		"block_hashes":      []any{uint64(100), uint64(101)},
+		"parent_block_hash": uint64(99),
+		"token_ids":         []uint32{1, 2, 3},
+		"block_size":        16,
+		"lora_id":           nil,
+		"medium":            "CPU",
+		"lora_name":         nil,
+		"extra_keys":        nil,
+		"group_idx":         groupIdx,
+		// kv_cache_spec_* omitted, as with omit_defaults.
+	}
+	payload, err := msgpack.Marshal([]any{1234567890.0, []any{blockStoredEvent}, nil})
+	require.NoError(t, err)
+
+	podID, modelName, eventBatch, err := adapter.ParseMessage(&kvevents.RawMessage{
+		Topic:   "kv@pod-1@llama-2-7b",
+		Payload: payload,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "pod-1", podID)
+	assert.Equal(t, "llama-2-7b", modelName)
+	require.Len(t, eventBatch.Events, 1)
+
+	blockStored, ok := eventBatch.Events[0].(*kvevents.BlockStoredEvent)
+	require.True(t, ok)
+	assert.Equal(t, []uint64{100, 101}, blockStored.BlockHashes)
+	assert.Equal(t, uint64(99), blockStored.ParentHash)
+	assert.Equal(t, []uint32{1, 2, 3}, blockStored.Tokens)
+	assert.Equal(t, 16, blockStored.BlockSize)
+	assert.Equal(t, "CPU", blockStored.DeviceTier)
+	require.NotNil(t, blockStored.GroupIdx)
+	assert.Equal(t, 0, *blockStored.GroupIdx)
+}
+
+// TestVLLMParseMessage_MapEncodedBlockRemovedAndCleared covers the remaining
+// map-encoded event kinds, mixed with an array-encoded event in one batch.
+func TestVLLMParseMessage_MapEncodedBlockRemovedAndCleared(t *testing.T) {
+	adapter := NewVLLMAdapter()
+
+	removed := map[string]any{
+		"type":         "BlockRemoved",
+		"block_hashes": []any{uint64(100)},
+		"medium":       "CPU",
+	}
+	cleared := map[string]any{"type": "AllBlocksCleared"}
+	arrayStored := []any{
+		"BlockStored", []any{uint64(7)}, nil, []uint32{9}, 1, nil, "GPU", nil, nil,
+	}
+	payload, err := msgpack.Marshal(
+		[]any{1234567890.0, []any{removed, cleared, arrayStored}, nil})
+	require.NoError(t, err)
+
+	_, _, eventBatch, err := adapter.ParseMessage(&kvevents.RawMessage{
+		Topic:   "kv@pod-1@m",
+		Payload: payload,
+	})
+	require.NoError(t, err)
+	require.Len(t, eventBatch.Events, 3)
+
+	blockRemoved, ok := eventBatch.Events[0].(*kvevents.BlockRemovedEvent)
+	require.True(t, ok)
+	assert.Equal(t, []uint64{100}, blockRemoved.BlockHashes)
+	assert.Equal(t, "CPU", blockRemoved.DeviceTier)
+
+	_, ok = eventBatch.Events[1].(*kvevents.AllBlocksClearedEvent)
+	require.True(t, ok)
+
+	_, ok = eventBatch.Events[2].(*kvevents.BlockStoredEvent)
+	require.True(t, ok)
+}
+
+// TestVLLMParseMessage_MapEncodedErrors pins the error behavior for malformed
+// map-encoded events: each failure mode reports a distinct, actionable error.
+func TestVLLMParseMessage_MapEncodedErrors(t *testing.T) {
+	adapter := NewVLLMAdapter()
+
+	for name, tc := range map[string]struct {
+		event   any
+		wantErr string
+	}{
+		"unknown tag": {
+			event:   map[string]any{"type": "SomethingNew"},
+			wantErr: "unknown vLLM event tag: SomethingNew",
+		},
+		"missing tag": {
+			event:   map[string]any{"block_hashes": []any{uint64(1)}},
+			wantErr: `missing the "type" tag`,
+		},
+		"non-string tag": {
+			event:   map[string]any{"type": 7},
+			wantErr: "is not a string",
+		},
+	} {
+		payload, err := msgpack.Marshal([]any{0.0, []any{tc.event}, nil})
+		require.NoError(t, err, name)
+		_, _, _, err = adapter.ParseMessage(&kvevents.RawMessage{
+			Topic:   "kv@pod-1@m",
+			Payload: payload,
+		})
+		require.ErrorContains(t, err, tc.wantErr, name)
+	}
 }

@@ -19,7 +19,6 @@ package kvcache
 import (
 	"context"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -46,9 +45,8 @@ func (t *tracedScorer) Score(
 	ctx context.Context,
 	keys []kvblock.BlockHash,
 	keyToPods map[kvblock.BlockHash][]kvblock.PodEntry,
-	modelName string,
 ) (map[string]float64, error) {
-	tracer := otel.Tracer(telemetry.InstrumentationName)
+	tracer := telemetry.Tracer("llm-d-kv-cache/pkg/kvcache")
 	_, span := tracer.Start(ctx, "llm_d.kv_cache.scorer.compute",
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
@@ -56,11 +54,10 @@ func (t *tracedScorer) Score(
 
 	span.SetAttributes(
 		attribute.String("llm_d.kv_cache.scorer.algorithm", string(t.next.Strategy())),
-		attribute.String("gen_ai.request.model", modelName),
 		attribute.Int("llm_d.kv_cache.scorer.key_count", len(keys)),
 	)
 
-	scores, err := t.next.Score(ctx, keys, keyToPods, modelName)
+	scores, err := t.next.Score(ctx, keys, keyToPods)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err

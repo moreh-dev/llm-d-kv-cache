@@ -27,11 +27,11 @@ import (
 // VLLMAdapter implements the kvevents.EngineAdapter interface for vLLM engines.
 // It parses raw transport messages (topic + msgpack payload) into domain events.
 //
-// vLLM serializes events using msgspec with array_like=True and omit_defaults=True,
-// producing positional msgpack arrays where trailing default fields may be absent.
-// To maintain forward and backward compatibility across vLLM versions (new fields
-// appended or trailing fields omitted), we decode into []any and extract fields
-// positionally with length guards instead of using fixed structs.
+// vLLM emits events either as positional msgpack arrays with trailing defaults
+// omitted (msgspec array_like=True) or, since vllm-project/vllm#42892, as
+// field-name maps tagged under "type". Both decode into the same positional
+// []any layout, extracted with length guards instead of fixed structs, so the
+// converters stay encoding-agnostic and tolerate appended or omitted fields.
 type VLLMAdapter struct {
 	eventConverters map[string]func([]any) (kvevents.GenericEvent, error)
 }
@@ -93,13 +93,26 @@ type msgpackVLLMEventBatch struct {
 	DataParallelRank *int `msgpack:",omitempty"`
 }
 
-// decodeVLLMEvent decodes a single vLLM event from msgpack bytes into a domain event.
-// It performs a single unmarshal into []any and passes the decoded fields to the
-// appropriate converter, avoiding double-decode overhead.
+// decodeVLLMEvent decodes a single vLLM event from msgpack bytes and dispatches
+// it to the matching converter. Map-encoded events are first normalized to the
+// positional []any layout the converters consume.
 func (v *VLLMAdapter) decodeVLLMEvent(rawEventBytes []byte) (kvevents.GenericEvent, error) {
+	var decoded any
+	if err := msgpack.Unmarshal(rawEventBytes, &decoded); err != nil {
+		return nil, fmt.Errorf("unmarshal event payload: %w", err)
+	}
+
 	var fields []any
-	if err := msgpack.Unmarshal(rawEventBytes, &fields); err != nil {
-		return nil, fmt.Errorf("failed to decode tagged union: %w", err)
+	switch ev := decoded.(type) {
+	case []any:
+		fields = ev
+	case map[string]any:
+		var err error
+		if fields, err = mapEventToFields(ev); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("event is neither an array nor a map: %T", decoded)
 	}
 
 	if len(fields) < 1 {
@@ -119,6 +132,50 @@ func (v *VLLMAdapter) decodeVLLMEvent(rawEventBytes []byte) (kvevents.GenericEve
 	return converter(fields)
 }
 
+// Field-name order of map-encoded events, mirroring the converters' positional
+// layouts.
+var (
+	blockStoredFieldOrder = []string{
+		"block_hashes", "parent_block_hash", "token_ids", "block_size",
+		"lora_id", "medium", "lora_name", "extra_keys", "group_idx",
+		"kv_cache_spec_kind", "kv_cache_spec_sliding_window",
+	}
+	blockRemovedFieldOrder = []string{"block_hashes", "medium", "group_idx"}
+)
+
+// mapEventToFields normalizes a map-encoded vLLM event to positional []any.
+// Absent fields become nil (same as an omitted trailing array field); unknown
+// tags pass through so converter lookup reports them uniformly.
+func mapEventToFields(ev map[string]any) ([]any, error) {
+	rawTag, exists := ev["type"]
+	if !exists {
+		return nil, fmt.Errorf("map-encoded event is missing the %q tag", "type")
+	}
+	tag, ok := rawTag.(string)
+	if !ok {
+		return nil, fmt.Errorf("map-encoded event tag (%q) is not a string: %T", "type", rawTag)
+	}
+
+	var order []string
+	switch tag {
+	case eventTagBlockStored:
+		order = blockStoredFieldOrder
+	case eventTagBlockRemoved:
+		order = blockRemovedFieldOrder
+	case eventTagAllBlocksCleared:
+		// no payload fields
+	default:
+		return []any{tag}, nil
+	}
+
+	fields := make([]any, 0, len(order)+1)
+	fields = append(fields, tag)
+	for _, name := range order {
+		fields = append(fields, ev[name])
+	}
+	return fields, nil
+}
+
 // fieldAt returns the element at index i from fields, or nil if out of bounds.
 func fieldAt(fields []any, i int) any {
 	if i < len(fields) {
@@ -130,16 +187,18 @@ func fieldAt(fields []any, i int) any {
 // convertBlockStoredEvent converts a decoded []any into a BlockStoredEvent.
 // vLLM field positions (array_like=True, tag=True):
 //
-//	[0] tag           string            (consumed by decodeVLLMEvent)
-//	[1] block_hashes  []hash
-//	[2] parent_hash   hash|nil
-//	[3] token_ids     []uint32
-//	[4] block_size    int               (consumed but not stored)
-//	[5] lora_id       int|nil           (optional, omit_defaults)
-//	[6] medium        string|nil        (optional, omit_defaults)
-//	[7] lora_name     string|nil        (optional, omit_defaults)
-//	[8] extra_keys    [][]any|nil       (optional, omit_defaults)
-//	[9] group_idx     int|nil           (optional, omit_defaults)
+//	[0]  tag                          string            (consumed by decodeVLLMEvent)
+//	[1]  block_hashes                 []hash
+//	[2]  parent_hash                  hash|nil
+//	[3]  token_ids                    []uint32
+//	[4]  block_size                   int
+//	[5]  lora_id                      int|nil           (optional, omit_defaults)
+//	[6]  medium                       string|nil        (optional, omit_defaults)
+//	[7]  lora_name                    string|nil        (optional, omit_defaults)
+//	[8]  extra_keys                   [][]any|nil       (optional, omit_defaults)
+//	[9]  group_idx                    int|nil           (optional, HMA)
+//	[10] kv_cache_spec_kind           string|nil        (optional, HMA)
+//	[11] kv_cache_spec_sliding_window int|nil           (optional, HMA)
 //
 // Trailing fields may be absent in older vLLM versions. Extra trailing fields
 // from newer vLLM versions are silently ignored.
@@ -175,7 +234,11 @@ func (v *VLLMAdapter) convertBlockStoredEvent(fields []any) (kvevents.GenericEve
 		return nil, fmt.Errorf("BlockStored: %w", err)
 	}
 
-	// [4] block_size — consumed but not stored in domain event
+	// [4] block_size
+	blockSize, err := toInt(fields[4])
+	if err != nil {
+		return nil, fmt.Errorf("BlockStored: block_size: %w", err)
+	}
 
 	// [5] lora_id (optional)
 	var loraID *int
@@ -220,25 +283,48 @@ func (v *VLLMAdapter) convertBlockStoredEvent(fields []any) (kvevents.GenericEve
 		}
 	}
 
-	// [9] group_idx (optional)
-	var groupIdx int
+	var groupIdx *int
 	if raw := fieldAt(fields, 9); raw != nil {
-		idx, err := toInt(raw)
-		if err == nil {
-			groupIdx = idx
+		group, err := toInt(raw)
+		if err != nil {
+			return nil, fmt.Errorf("BlockStored: group_idx: %w", err)
 		}
-		// Silently ignore field if it's not an int (forward compatibility)
+		if group < 0 {
+			return nil, fmt.Errorf("BlockStored: group_idx: negative value: %d", group)
+		}
+		groupIdx = &group
+	}
+
+	var specKind kvevents.KVCacheSpecKind
+	if raw := fieldAt(fields, 10); raw != nil {
+		s, ok := raw.(string)
+		if !ok {
+			return nil, fmt.Errorf("BlockStored: kv_cache_spec_kind is not a string: %T", raw)
+		}
+		specKind = kvevents.KVCacheSpecKind(s)
+	}
+
+	var slidingWindow *int
+	if raw := fieldAt(fields, 11); raw != nil {
+		window, err := toInt(raw)
+		if err != nil {
+			return nil, fmt.Errorf("BlockStored: kv_cache_spec_sliding_window: %w", err)
+		}
+		slidingWindow = &window
 	}
 
 	return &kvevents.BlockStoredEvent{
-		BlockHashes: blockHashes,
-		Tokens:      tokens,
-		ParentHash:  parentHash,
-		DeviceTier:  deviceTier,
-		LoraID:      loraID,
-		LoraName:    loraName,
-		ExtraKeys:   extraKeys,
-		GroupIdx:    groupIdx,
+		BlockHashes:                  blockHashes,
+		Tokens:                       tokens,
+		ParentHash:                   parentHash,
+		BlockSize:                    blockSize,
+		DeviceTier:                   deviceTier,
+		LoraID:                       loraID,
+		LoraName:                     loraName,
+		ExtraKeys:                    extraKeys,
+		GroupIdx:                     groupIdx,
+		KVCacheSpecKind:              specKind,
+		KVCacheSpecSlidingWindowSize: slidingWindow,
 	}, nil
 }
 
@@ -248,7 +334,7 @@ func (v *VLLMAdapter) convertBlockStoredEvent(fields []any) (kvevents.GenericEve
 //	[0] tag           string
 //	[1] block_hashes  []hash
 //	[2] medium        string|nil      (optional, omit_defaults)
-//	[3] group_idx     int|nil          (optional, omit_defaults)
+//	[3] group_idx     int|nil         (optional, HMA)
 func (v *VLLMAdapter) convertBlockRemovedEvent(fields []any) (kvevents.GenericEvent, error) {
 	if len(fields) < 2 {
 		return nil, fmt.Errorf("BlockRemoved: need at least 2 fields, got %d", len(fields))
@@ -272,14 +358,16 @@ func (v *VLLMAdapter) convertBlockRemovedEvent(fields []any) (kvevents.GenericEv
 		deviceTier = s
 	}
 
-	// [3] group_idx (optional)
-	var groupIdx int
+	var groupIdx *int
 	if raw := fieldAt(fields, 3); raw != nil {
-		idx, err := toInt(raw)
-		if err == nil {
-			groupIdx = idx
+		group, err := toInt(raw)
+		if err != nil {
+			return nil, fmt.Errorf("BlockRemoved: group_idx: %w", err)
 		}
-		// Silently ignore field if it's not an int (forward compatibility)
+		if group < 0 {
+			return nil, fmt.Errorf("BlockRemoved: group_idx: negative value: %d", group)
+		}
+		groupIdx = &group
 	}
 
 	return &kvevents.BlockRemovedEvent{

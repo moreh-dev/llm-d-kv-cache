@@ -50,6 +50,7 @@ from tests.test_fs_backend import (
     make_canonical_kv_caches,
     make_gpu_specs,
     make_storage_specs,
+    roundtrip_once,
     throughput_gbps,
     total_block_size_mb,
     wait_for,
@@ -138,11 +139,12 @@ def roundtrip_once_obj(
     file_mapper = FileMapper(
         root_dir=f"kv-test/{int(time.time())}",
         model_name="test-model",
-        gpu_block_size=gpu_block_size,
+        hash_block_size=gpu_block_size,
         gpu_blocks_per_file=gpu_blocks_per_file,
         tp_size=1,
         pp_size=1,
         pcp_size=1,
+        dcp_size=1,
         rank=0,
         dtype=str(dtype),
     )
@@ -217,12 +219,16 @@ def roundtrip_once_obj(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("gpu_blocks_per_file", [1, 2, 4])
 @pytest.mark.parametrize("start_idx", [0, 3])
-def test_obj_backend_roundtrip(start_idx: int, obj_config, default_vllm_config):
+def test_obj_backend_roundtrip(
+    gpu_blocks_per_file: int, start_idx: int, obj_config, default_vllm_config
+):
     """End-to-end write/read roundtrip through the OBJ (S3/MinIO) backend.
 
-    Writes num_blocks GPU blocks to S3, then reads back a subset starting at
-    start_idx, and verifies bit-exact equality.
+    Writes num_blocks GPU blocks to S3, reads back a subset starting at
+    start_idx, and verifies bit-exact equality. Covers gpu_blocks_per_file > 1
+    to validate multi-block packing and partial reads.
     """
     num_layers = 80
     num_blocks = 8
@@ -233,11 +239,22 @@ def test_obj_backend_roundtrip(start_idx: int, obj_config, default_vllm_config):
     threads_per_gpu = 8
     gpu_block_size = 16
 
-    write_block_ids = list(range(num_blocks))
-    read_block_ids = list(range(start_idx, num_blocks))
+    file_mapper = FileMapper(
+        root_dir=f"kv-test/{int(time.time())}/gpf{gpu_blocks_per_file}",
+        model_name="test-model",
+        hash_block_size=gpu_block_size,
+        gpu_blocks_per_file=gpu_blocks_per_file,
+        tp_size=1,
+        pp_size=1,
+        pcp_size=1,
+        dcp_size=1,
+        rank=0,
+        dtype=str(dtype),
+    )
 
-    roundtrip_once_obj(
-        obj_config=obj_config,
+    lookup = NixlLookup(obj_config)
+    roundtrip_once(
+        file_mapper=file_mapper,
         dtype=dtype,
         num_layers=num_layers,
         num_blocks=num_blocks,
@@ -245,7 +262,13 @@ def test_obj_backend_roundtrip(start_idx: int, obj_config, default_vllm_config):
         gpu_block_size=gpu_block_size,
         num_heads=num_heads,
         head_size=head_size,
-        write_block_ids=write_block_ids,
-        read_block_ids=read_block_ids,
+        write_block_ids=list(range(num_blocks)),
+        read_block_ids=list(range(start_idx, num_blocks)),
+        gpu_blocks_per_file=gpu_blocks_per_file,
         threads_per_gpu=threads_per_gpu,
+        extra_config=obj_config,
+        handlers_cls=NixlStorageOffloadingHandlers,
+        wait_timeout=30.0,
+        cleanup=False,
+        file_exists_fn=lookup.exists,
     )

@@ -21,13 +21,28 @@ UNAME_S := $(shell uname -s)
 
 TOOLS_DIR := $(shell pwd)/hack/tools
 
+# Build metadata injected into the version package via -ldflags.
+VERSION_PKG := github.com/llm-d/llm-d-kv-cache/version
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+BUILD_REF ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo $(DEV_VERSION))
+LDFLAGS := -X '$(VERSION_PKG).CommitSHA=$(GIT_COMMIT)' -X '$(VERSION_PKG).BuildRef=$(BUILD_REF)'
+
 PYTHON_EXE := $(shell command -v python3.12 || command -v python3)
 
-CONTAINER_TOOL := $(shell { command -v docker >/dev/null 2>&1 && echo docker; } || { command -v podman >/dev/null 2>&1 && echo podman; } || echo "")
+CONTAINER_TOOL := $(shell { command -v docker >/dev/null 2>&1 && echo docker; } || { command -v podman >/dev/null 2>&1 && echo podman; })
+
+ifeq ($(CONTAINER_TOOL),)
+$(error Neither docker nor podman is installed. Try: sudo apt install docker.io OR brew install docker)
+endif
 BUILDER := $(shell command -v buildah >/dev/null 2>&1 && echo buildah || echo $(CONTAINER_TOOL))
 UDS_TOKENIZER_IMAGE ?= llm-d-uds-tokenizer:e2e-test
 FS_BACKEND_NAME ?= llmd-fs-backend
 FS_BACKEND_DEV_IMG ?= $(IMAGE_TAG_BASE)/$(FS_BACKEND_NAME):$(DEV_VERSION)
+FS_BACKEND_DIR := kv_connectors/llmd_fs_backend
+PVC_EVICTOR_DIR := kv_connectors/pvc_evictor
+CPU_TEST_DIRS ?= $(FS_BACKEND_DIR)/tests/cpu $(PVC_EVICTOR_DIR)/tests
+CPU_TEST_VENV_DIR := $(FS_BACKEND_DIR)/.venv
+CPU_TEST_VENV_BIN := $(CPU_TEST_VENV_DIR)/bin
 
 # go source files
 SRC = $(shell find . -type f -name '*.go')
@@ -254,6 +269,24 @@ unit-test-embedded: check-go install-python-deps download-zmq ## Run unit tests 
 	@printf "\033[33;1m==== Running unit tests (with embedded tokenizers) ====\033[0m\n"
 	@go test -v -tags $(EMBEDDED_TAGS) ./pkg/...
 
+.PHONY: cpu-test-install-deps
+cpu-test-install-deps: ## Set up venv and install CPU test dependencies
+	@printf "\033[33;1m==== Setting up CPU test venv ====\033[0m\n"
+	@if [ ! -f "$(CPU_TEST_VENV_BIN)/python" ]; then \
+		echo "Creating virtual environment in $(CPU_TEST_VENV_DIR)..."; \
+		$(PYTHON_EXE) -m venv $(CPU_TEST_VENV_DIR); \
+		echo "Upgrading pip..."; \
+		$(CPU_TEST_VENV_BIN)/pip install --upgrade pip > /dev/null; \
+	else \
+		echo "Virtual environment already exists"; \
+	fi
+	@$(CPU_TEST_VENV_BIN)/pip install -q -r $(FS_BACKEND_DIR)/tests/requirements-cpu.txt
+
+.PHONY: unit-test-cpu
+unit-test-cpu: cpu-test-install-deps ## Run CPU-safe Python unit tests
+	@printf "\033[33;1m==== Running CPU Python unit tests ====\033[0m\n"
+	@$(CPU_TEST_VENV_BIN)/python -m pytest -q $(CPU_TEST_DIRS)
+
 .PHONY: unit-test-race
 unit-test-race: check-go download-zmq ## Run unit tests with Go race detector enabled
 	@printf "\033[33;1m==== Running unit tests with race detector ====\033[0m\n"
@@ -271,9 +304,7 @@ e2e-test-embedded: check-go download-local-llama3 install-python-deps download-z
 image-build-uds: check-container-tool ## Build the UDS tokenizer container image
 	@printf "\033[33;1m==== Building UDS tokenizer image $(UDS_TOKENIZER_IMAGE) ====\033[0m\n"
 	$(CONTAINER_TOOL) build \
-		--platform $(TARGETOS)/$(TARGETARCH) \
-		--build-arg TARGETOS=$(TARGETOS) \
-		--build-arg TARGETARCH=$(TARGETARCH) \
+		--platform linux/$(TARGETARCH) \
 		-t $(UDS_TOKENIZER_IMAGE) services/uds_tokenizer
 
 .PHONY: e2e-test-uds
@@ -343,22 +374,20 @@ build-uds: check-go download-zmq ## Build without embedded tokenizers (no Python
 	@printf "\033[33;1m==== Building (UDS-only, no embedded tokenizers) ====\033[0m\n"
 	@go build ./pkg/...
 	@mkdir -p bin
-	@go build -o bin/$(PROJECT_NAME) ./examples/kv_events/online
+	@go build -ldflags "$(LDFLAGS)" -o bin/$(PROJECT_NAME) ./examples/kv_events/online
 	@echo "✅ UDS-only build succeeded"
 
 .PHONY: build-embedded
 build-embedded: check-go install-python-deps download-zmq ## Build with embedded tokenizers
 	@printf "\033[33;1m==== Building application binary (with embedded tokenizers) ====\033[0m\n"
-	@go build -tags $(EMBEDDED_TAGS) -o bin/$(PROJECT_NAME) examples/kv_events/online/main.go
+	@go build -tags $(EMBEDDED_TAGS) -ldflags "$(LDFLAGS)" -o bin/$(PROJECT_NAME) examples/kv_events/online/main.go
 	@echo "✅ Built examples/kv_events/online/main.go -> bin/$(PROJECT_NAME)"
 
 .PHONY:	image-build
 image-build: check-container-tool load-version-json ## Build Docker image
 	@printf "\033[33;1m==== Building Docker image $(IMG) ====\033[0m\n"
 	$(CONTAINER_TOOL) build \
-		--platform $(TARGETOS)/$(TARGETARCH) \
-		--build-arg TARGETOS=$(TARGETOS) \
-		--build-arg TARGETARCH=$(TARGETARCH) \
+		--platform linux/$(TARGETARCH) \
 		-t $(IMG) .
 .PHONY: image-push
 image-push: check-container-tool load-version-json ## Push Docker image $(IMG) to registry
@@ -683,7 +712,7 @@ define BUILD_EXAMPLE_TEMPLATE
 $(1): $$(SRC) | check-go install-python-deps download-zmq
 	@echo "Building $$@..."
 	@mkdir -p $$(dir $$@)
-	@go build -tags $(EMBEDDED_TAGS) -o $$@ $(2)
+	@go build -tags $(EMBEDDED_TAGS) -ldflags "$(LDFLAGS)" -o $$@ $(2)
 	@echo "✅ Built $$@"
 endef
 
@@ -756,9 +785,7 @@ run-example: ## Run the example with UDS tokenizer in Docker (e.g., make run-exa
 image-fs-backend-build: check-container-tool load-version-json ## Build the development container for the llmd_fs_backend connector
 	@printf "\033[33;1m==== Building development container $(FS_BACKEND_DEV_IMG) ====\033[0m\n"
 	$(CONTAINER_TOOL) build \
-		--platform $(TARGETOS)/$(TARGETARCH) \
-		--build-arg TARGETOS=$(TARGETOS) \
-		--build-arg TARGETARCH=$(TARGETARCH) \
+		--platform linux/$(TARGETARCH) \
 		-f kv_connectors/llmd_fs_backend/Dockerfile.dev \
 		-t $(FS_BACKEND_DEV_IMG) .
 

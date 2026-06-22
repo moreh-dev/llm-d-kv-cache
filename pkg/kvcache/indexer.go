@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -41,7 +40,6 @@ type Config struct {
 	KVBlockIndexConfig  *kvblock.IndexConfig    `json:"kvBlockIndexConfig"`
 	KVBlockScorerConfig *KVBlockScorerConfig    // not exported
 	BackendConfigs      []*KVCacheBackendConfig `json:"kvCacheBackendConfigs"`
-	ModelConfigs        []*ModelConfig          `json:"modelConfigs,omitempty"`
 
 	// TokenizersPoolConfig configures the in-process tokenization pool.
 	// Leaving it nil disables the pool; the prompt-string entry points then
@@ -59,7 +57,6 @@ func NewDefaultConfig() (*Config, error) {
 		KVBlockIndexConfig:  kvblock.DefaultIndexConfig(),
 		KVBlockScorerConfig: DefaultKVBlockScorerConfig(),
 		BackendConfigs:      DefaultKVCacheBackendConfig(),
-		ModelConfigs:        DefaultModelConfigs(),
 	}, nil
 }
 
@@ -91,18 +88,18 @@ func NewKVCacheIndexer(ctx context.Context, config *Config, tokenProcessor kvblo
 	}
 
 	// Wrap index with tracing instrumentation.
-	// When tracing is not configured, otel.Tracer() returns a no-op implementation.
+	// When tracing is not configured, the tracer is a no-op implementation.
 	kvBlockIndex = kvblock.NewTracedIndex(kvBlockIndex)
 
+	// override backend configs with the ones from the config, if the defaults are not used.
 	config.KVBlockScorerConfig.BackendConfigs = config.BackendConfigs
-	config.KVBlockScorerConfig.ModelConfigs = config.ModelConfigs
 	scorer, err := NewKVBlockScorer(config.KVBlockScorerConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KVBlockScorer: %w", err)
 	}
 
 	// Wrap scorer with tracing instrumentation.
-	// When tracing is not configured, otel.Tracer() returns a no-op implementation.
+	// When tracing is not configured, the tracer is a no-op implementation.
 	scorer = NewTracedScorer(scorer)
 
 	indexer := &Indexer{
@@ -142,7 +139,8 @@ func (k *Indexer) KVBlockIndex() kvblock.Index {
 // Callers can inspect it via errors.Is to distinguish missing-pool from other
 // failures.
 var ErrInternalTokenizationDisabled = fmt.Errorf(
-	"internal tokenization not configured: tokenize externally and call ScoreTokens / ComputeBlockKeysFromTokens")
+	"internal tokenization not configured: tokenize externally and call ScoreTokens / ComputeBlockKeysFromTokens",
+)
 
 // ComputeBlockKeys computes the KV-block keys for a given prompt and model name.
 //
@@ -172,7 +170,8 @@ func (k *Indexer) ComputeBlockKeys(ctx context.Context,
 	if features != nil {
 		extraFeatures = kvblock.ComputeBlockExtraFeatures(
 			features.MMHashes, features.MMPlaceholders,
-			k.blockSize(), len(tokens))
+			k.blockSize(), len(tokens),
+		)
 	}
 
 	return k.ComputeBlockKeysFromTokens(ctx, tokens, modelName, extraFeatures)
@@ -204,8 +203,6 @@ func (k *Indexer) ComputeBlockKeysFromTokens(ctx context.Context, tokens []uint3
 // A pod identifier should be its address. An empty podIdentifiers set means
 // all pods are considered.
 //
-// The function returns a map of pod identifiers to scores.
-//
 // Deprecated: use ScoreTokens.
 func (k *Indexer) GetPodScores(ctx context.Context,
 	renderResponsesReq *types.RenderResponsesRequest,
@@ -233,7 +230,8 @@ func (k *Indexer) GetPodScores(ctx context.Context,
 	if features != nil {
 		extraFeatures = kvblock.ComputeBlockExtraFeatures(
 			features.MMHashes, features.MMPlaceholders,
-			k.blockSize(), len(tokens))
+			k.blockSize(), len(tokens),
+		)
 	}
 
 	return k.ScoreTokens(ctx, tokens, modelName, podIdentifiers, extraFeatures)
@@ -253,8 +251,9 @@ func (k *Indexer) ScoreTokens(
 	podIdentifiers []string,
 	extraFeatures []*kvblock.BlockExtraFeatures,
 ) (map[string]float64, error) {
-	tracer := otel.Tracer(telemetry.InstrumentationName)
-	ctx, span := tracer.Start(ctx, "llm_d.kv_cache.score_tokens",
+	tracer := telemetry.Tracer("llm-d-kv-cache/pkg/kvcache")
+	ctx, span := tracer.Start(
+		ctx, "llm_d.kv_cache.score_tokens",
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
 	defer span.End()
@@ -304,7 +303,7 @@ func (k *Indexer) ScoreTokens(
 		attribute.Int("llm_d.kv_cache.blocks_found", blocksFound),
 	)
 
-	podScores, err := k.kvBlockScorer.Score(ctx, blockKeys, keyToPods, modelName)
+	podScores, err := k.kvBlockScorer.Score(ctx, blockKeys, keyToPods)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("failed to query kvblock scorer: %w", err)

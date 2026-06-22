@@ -360,28 +360,22 @@ bench: check-go install-python-deps download-zmq ## Run benchmarks (requires emb
 	@go test -bench=. -benchmem -tags $(EMBEDDED_TAGS) ./pkg/tokenization/
 
 .PHONY: run
-run: build-embedded ## Run the application locally
+run: build-uds ## Run the application locally
 	@printf "\033[33;1m==== Running application ====\033[0m\n"
 	@./bin/$(PROJECT_NAME)
 
 ##@ Build
 
 .PHONY: build
-build: build-uds build-embedded ## Build both UDS-only and embedded binaries
+build: build-uds ## Build the application binary (UDS tokenizer)
 
 .PHONY: build-uds
-build-uds: check-go download-zmq ## Build without embedded tokenizers (no Python required)
-	@printf "\033[33;1m==== Building (UDS-only, no embedded tokenizers) ====\033[0m\n"
+build-uds: check-go download-zmq ## Build the application (vLLM/UDS tokenizer; no Python required)
+	@printf "\033[33;1m==== Building ====\033[0m\n"
 	@go build ./pkg/...
 	@mkdir -p bin
 	@go build -ldflags "$(LDFLAGS)" -o bin/$(PROJECT_NAME) ./examples/kv_events/online
-	@echo "✅ UDS-only build succeeded"
-
-.PHONY: build-embedded
-build-embedded: check-go install-python-deps download-zmq ## Build with embedded tokenizers
-	@printf "\033[33;1m==== Building application binary (with embedded tokenizers) ====\033[0m\n"
-	@go build -tags $(EMBEDDED_TAGS) -ldflags "$(LDFLAGS)" -o bin/$(PROJECT_NAME) examples/kv_events/online/main.go
-	@echo "✅ Built examples/kv_events/online/main.go -> bin/$(PROJECT_NAME)"
+	@echo "✅ Build succeeded"
 
 .PHONY:	image-build
 image-build: check-container-tool load-version-json ## Build Docker image

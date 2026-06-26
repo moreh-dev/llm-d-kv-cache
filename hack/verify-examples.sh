@@ -7,12 +7,10 @@ fail() {
   exit 1
 }
 
-# Wait up to 180s for a pattern to appear in a log file; returns 1 on timeout.
-# Cold embedded-tokenizer init (download + vLLM create_engine_config for
-# Qwen2-VL-7B) alone takes ~50-60s, so 60s left no room for the demo itself.
+# Wait up to 30s for a pattern to appear in a log file; returns 1 on timeout.
 wait_for_log() {
   local log=$1 pattern=$2
-  for i in {1..180}; do
+  for i in {1..30}; do
     grep -q "$pattern" "$log" 2>/dev/null && return 0
     sleep 1
   done

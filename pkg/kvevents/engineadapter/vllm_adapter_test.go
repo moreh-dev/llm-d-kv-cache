@@ -515,10 +515,10 @@ func TestVLLMParseMessage_MapEncodedBlockStored(t *testing.T) {
 	assert.Equal(t, []uint64{100, 101}, blockStored.BlockHashes)
 	assert.Equal(t, uint64(99), blockStored.ParentHash)
 	assert.Equal(t, []uint32{1, 2, 3}, blockStored.Tokens)
-	assert.Equal(t, 16, blockStored.BlockSize)
+	// block_size is consumed by the adapter but not stored on the domain event
+	// in this fork; GroupIdx is a plain int (not a pointer) here.
 	assert.Equal(t, "CPU", blockStored.DeviceTier)
-	require.NotNil(t, blockStored.GroupIdx)
-	assert.Equal(t, 0, *blockStored.GroupIdx)
+	assert.Equal(t, 0, blockStored.GroupIdx)
 }
 
 // TestVLLMParseMessage_MapEncodedBlockRemovedAndCleared covers the remaining

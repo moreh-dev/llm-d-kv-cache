@@ -11,11 +11,28 @@ NAMESPACE ?= hc4ai-operator
 TARGETOS ?= $(shell go env GOOS)
 TARGETARCH ?= $(shell go env GOARCH)
 
-CONTAINER_TOOL := $(shell { command -v docker >/dev/null 2>&1 && echo docker; } || { command -v podman >/dev/null 2>&1 && echo podman; } || echo "")
+# Build metadata injected into the version package via -ldflags.
+VERSION_PKG := github.com/llm-d/llm-d-kv-cache/version
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+BUILD_REF ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo $(DEV_VERSION))
+LDFLAGS := -X '$(VERSION_PKG).CommitSHA=$(GIT_COMMIT)' -X '$(VERSION_PKG).BuildRef=$(BUILD_REF)'
+
+PYTHON_EXE := $(shell command -v python3.12 || command -v python3)
+
+CONTAINER_TOOL := $(shell { command -v docker >/dev/null 2>&1 && echo docker; } || { command -v podman >/dev/null 2>&1 && echo podman; })
+
+ifeq ($(CONTAINER_TOOL),)
+$(error Neither docker nor podman is installed. Try: sudo apt install docker.io OR brew install docker)
+endif
 BUILDER := $(shell command -v buildah >/dev/null 2>&1 && echo buildah || echo $(CONTAINER_TOOL))
 UDS_TOKENIZER_IMAGE ?= llm-d-uds-tokenizer:e2e-test
 FS_BACKEND_NAME ?= llmd-fs-backend
 FS_BACKEND_DEV_IMG ?= $(IMAGE_TAG_BASE)/$(FS_BACKEND_NAME):$(DEV_VERSION)
+FS_BACKEND_DIR := kv_connectors/llmd_fs_backend
+PVC_EVICTOR_DIR := kv_connectors/pvc_evictor
+CPU_TEST_DIRS ?= $(FS_BACKEND_DIR)/tests/cpu $(PVC_EVICTOR_DIR)/tests
+CPU_TEST_VENV_DIR := $(FS_BACKEND_DIR)/.venv
+CPU_TEST_VENV_BIN := $(CPU_TEST_VENV_DIR)/bin
 
 # go source files
 SRC = $(shell find . -type f -name '*.go')
@@ -26,16 +43,23 @@ help: ## Print help
 
 
 ##@ Precommit code checks
-.PHONY: precommit lint tidy-go copr-fix
+.PHONY: precommit lint lint-fix tidy-go copr-fix
 precommit: tidy-go lint copr-fix
 
 tidy-go:
 	@echo "Tidying up go.mod and go.sum..."
 	@go mod tidy
 
-lint:
-	@echo "==== Running linting ===="
+lint: check-ruff ## Run all linters (Go + Python)
+	@echo "==== Running Go linting ===="
 	@golangci-lint run
+	@echo "==== Running Python linting (ruff) ===="
+	@ruff check .
+
+lint-fix: check-ruff ## Run ruff with auto-fix and formatting
+	@echo "==== Running Python linting with auto-fix (ruff) ===="
+	@ruff check --fix .
+	@ruff format .
 
 copr-fix:
 	@echo "Adding copyright headers..."
@@ -56,12 +80,30 @@ clang:
 test: unit-test e2e-test ## Run all tests (unit + e2e)
 
 .PHONY: unit-test
-unit-test: unit-test-uds  ## Run unit tests
+unit-test: unit-test-uds unit-test-cpu ## Run unit tests
 
 .PHONY: unit-test-uds
 unit-test-uds: check-go download-zmq ## Run unit tests
 	@printf "\033[33;1m==== Running unit tests ====\033[0m\n"
 	@go test -v ./pkg/...
+
+.PHONY: cpu-test-install-deps
+cpu-test-install-deps: ## Set up venv and install CPU test dependencies
+	@printf "\033[33;1m==== Setting up CPU test venv ====\033[0m\n"
+	@if [ ! -f "$(CPU_TEST_VENV_BIN)/python" ]; then \
+		echo "Creating virtual environment in $(CPU_TEST_VENV_DIR)..."; \
+		$(PYTHON_EXE) -m venv $(CPU_TEST_VENV_DIR); \
+		echo "Upgrading pip..."; \
+		$(CPU_TEST_VENV_BIN)/pip install --upgrade pip > /dev/null; \
+	else \
+		echo "Virtual environment already exists"; \
+	fi
+	@$(CPU_TEST_VENV_BIN)/pip install -q -r $(FS_BACKEND_DIR)/tests/requirements-cpu.txt
+
+.PHONY: unit-test-cpu
+unit-test-cpu: cpu-test-install-deps ## Run CPU-safe Python unit tests
+	@printf "\033[33;1m==== Running CPU Python unit tests ====\033[0m\n"
+	@$(CPU_TEST_VENV_BIN)/python -m pytest -q $(CPU_TEST_DIRS)
 
 .PHONY: unit-test-race
 unit-test-race: check-go download-zmq ## Run unit tests with Go race detector enabled
@@ -108,7 +150,7 @@ uds-tokenizer-install-deps: ## Set up venv and install UDS tokenizer dependencie
 	@printf "\033[33;1m==== Setting up UDS tokenizer venv and dependencies ====\033[0m\n"
 	@if [ ! -f "$(UDS_TOKENIZER_VENV_BIN)/python" ]; then \
 		echo "Creating virtual environment in $(UDS_TOKENIZER_VENV_DIR)..."; \
-		python3 -m venv $(UDS_TOKENIZER_VENV_DIR); \
+		$(PYTHON_EXE) -m venv $(UDS_TOKENIZER_VENV_DIR); \
 		echo "Upgrading pip..."; \
 		$(UDS_TOKENIZER_VENV_BIN)/pip install --upgrade pip; \
 	else \
@@ -140,7 +182,7 @@ build-uds: check-go download-zmq ## Build
 	@printf "\033[33;1m==== Building ====\033[0m\n"
 	@go build ./pkg/...
 	@mkdir -p bin
-	@go build -o bin/$(PROJECT_NAME) ./examples/kv_events/online
+	@go build -ldflags "$(LDFLAGS)" -o bin/$(PROJECT_NAME) ./examples/kv_events/online
 	@echo "✅ Build succeeded"
 
 .PHONY:	image-build
@@ -352,6 +394,13 @@ check-podman:
 	  echo "Podman is not installed. You can install it with:"; \
 	  echo "sudo apt install podman  OR  brew install podman"; exit 1; }
 
+.PHONY: check-ruff
+check-ruff:
+	@command -v ruff >/dev/null 2>&1 || { \
+	  echo "ruff is not installed. Installing..."; \
+	  pip install ruff; \
+	}
+
 ##@ Alias checking
 .PHONY: check-alias
 check-alias: check-container-tool
@@ -461,7 +510,7 @@ define BUILD_EXAMPLE_TEMPLATE
 $(1): $$(SRC) | check-go
 	@echo "Building $$@..."
 	@mkdir -p $$(dir $$@)
-	@go build -o $$@ $(2)
+	@go build -ldflags "$(LDFLAGS)" -o $$@ $(2)
 	@echo "✅ Built $$@"
 endef
 

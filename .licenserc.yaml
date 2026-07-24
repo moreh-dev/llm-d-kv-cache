@@ -24,7 +24,6 @@ header:
     - "build"
     - "dist"
     - "licenses"
-    - "pkg/tokenization/testdata/test-model"
     - "**/*.md"
     - "**/*.yaml"
     - "**/*.toml"

@@ -117,7 +117,6 @@ func New(ctx context.Context, config PrecisePrefixCachePluginConfig) (*PrecisePr
 		return nil, fmt.Errorf("failed to create engine adapter: %w", err)
 	}
 
-	config.KVEventsConfig.ModelConfigs = config.IndexerConfig.ModelConfigs
 	pool := kvevents.NewPool(config.KVEventsConfig, kvCacheIndexer.KVBlockIndex(), tokenProcessor, adapter)
 	pool.Start(ctx)
 
@@ -285,8 +284,9 @@ func (s *PrecisePrefixCacheScorer) getScores(ctx context.Context, request *types
 		// Convert messages to the format expected by the renderer
 		for _, msg := range request.Body.ChatCompletions.Messages {
 			renderReq.Conversation = append(renderReq.Conversation, types.Conversation{
-				Role:    msg.Role,
-				Content: msg.Content.Raw,
+				Role:      msg.Role,
+				Content:   types.Content{Raw: msg.Content.Raw},
+				ToolCalls: msg.ToolCalls,
 			})
 		}
 

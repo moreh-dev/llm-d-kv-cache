@@ -16,9 +16,13 @@ from collections.abc import Iterator
 
 from vllm.config import VllmConfig
 from vllm.v1.kv_cache_interface import KVCacheConfig
-from vllm.v1.kv_offload.abstract import LoadStoreSpec, OffloadingManager
-from vllm.v1.kv_offload.mediums import GPULoadStoreSpec
-from vllm.v1.kv_offload.spec import CanonicalKVCaches, OffloadingSpec
+from vllm.v1.kv_offload.base import (
+    CanonicalKVCaches,
+    GPULoadStoreSpec,
+    LoadStoreSpec,
+    OffloadingManager,
+    OffloadingSpec,
+)
 from vllm.v1.kv_offload.worker.worker import OffloadingHandler
 
 from llmd_fs_backend.file_mapper import FileMapper
@@ -41,7 +45,17 @@ class SharedStorageOffloadingSpec(OffloadingSpec):
     """
 
     def __init__(self, vllm_config: VllmConfig, kv_cache_config: KVCacheConfig):
-        super().__init__(vllm_config, kv_cache_config)
+        # Hide "block_size" from the base class to bypass the uniformity
+        # assertion on hybrid models (we derive the factor ourselves below).
+        kv_transfer_config = vllm_config.kv_transfer_config
+        assert kv_transfer_config is not None
+        extra_config = kv_transfer_config.kv_connector_extra_config
+        hidden_block_size = extra_config.pop("block_size", None)
+        try:
+            super().__init__(vllm_config, kv_cache_config)
+        finally:
+            if hidden_block_size is not None:
+                extra_config["block_size"] = hidden_block_size
 
         self._manager: OffloadingManager | None = None
         # worker-side
@@ -63,14 +77,16 @@ class SharedStorageOffloadingSpec(OffloadingSpec):
             self.extra_config.get("block_size", DEFAULT_STORAGE_BLOCK_SIZE)
         )
 
-        assert len(self.gpu_block_size) == 1, (
-            f"Expected exactly one KV cache group, got {len(self.gpu_block_size)}"
+        # hash_block_size = GCD of all groups' block sizes (the granularity at
+        # which Request.block_hashes are computed); use it instead of
+        # cache_config.block_size which can be larger on hybrid models (e.g. DSv4).
+        assert self.offloaded_block_size % self.hash_block_size == 0, (
+            "offloaded_block_size must be a multiple of hash_block_size"
         )
+        self.gpu_blocks_per_file = self.offloaded_block_size // self.hash_block_size
 
-        assert self.offloaded_block_size % self.gpu_block_size[0] == 0, (
-            "offloaded_block_size must be a multiple of gpu_block_size"
-        )
-        self.gpu_blocks_per_file = self.offloaded_block_size // self.gpu_block_size[0]
+        # Derive block_size_factor from file layout instead of base class.
+        self.block_size_factor = self.gpu_blocks_per_file
 
         self.read_preferring_ratio = float(
             self.extra_config.get(
@@ -89,19 +105,13 @@ class SharedStorageOffloadingSpec(OffloadingSpec):
         pcp_size = parallel_config.prefill_context_parallel_size
         assert parallel_config.world_size == tp_size * pp_size * pcp_size
 
-        # TODO: use dtype from KVCacheConfig instead of VllmConfig.CacheConfig
-        dtype = str(vllm_config.cache_config.cache_dtype).replace("torch.", "")
-        self.file_mapper = FileMapper(
+        self.file_mapper = FileMapper.from_vllm_config(
             root_dir=shared_storage_path,
-            model_name=vllm_config.model_config.model,
-            gpu_block_size=self.gpu_block_size[0],
+            vllm_config=vllm_config,
+            kv_cache_config=kv_cache_config,
             gpu_blocks_per_file=self.gpu_blocks_per_file,
-            tp_size=tp_size,
-            pp_size=pp_size,
-            pcp_size=pcp_size,
-            rank=parallel_config.rank,
-            dtype=dtype,
         )
+        self.file_mapper.write_run_config()
 
     def get_manager(self) -> OffloadingManager:
         assert self.vllm_config.parallel_config.rank == 0, "Scheduler rank should be 0"
@@ -110,13 +120,16 @@ class SharedStorageOffloadingSpec(OffloadingSpec):
             if backend == "OBJ":
                 from llmd_nixl.manager import NixlStorageOffloadingManager
 
+                self.extra_config.setdefault("storage_medium", "OBJECT_STORE")
                 self._manager = NixlStorageOffloadingManager(
                     file_mapper=self.file_mapper,
                     extra_config=self.extra_config,
                 )
             else:
+                self.extra_config.setdefault("storage_medium", "SHARED_STORAGE")
                 self._manager = SharedStorageOffloadingManager(
                     file_mapper=self.file_mapper,
+                    extra_config=self.extra_config,
                 )
         return self._manager
 
@@ -135,7 +148,7 @@ class SharedStorageOffloadingSpec(OffloadingSpec):
             self._handlers = handlers_cls(
                 file_mapper=self.file_mapper,
                 gpu_blocks_per_file=self.gpu_blocks_per_file,
-                gpu_block_size=self.gpu_block_size[0],
+                gpu_block_size=self.hash_block_size,
                 kv_caches=kv_caches,
                 threads_per_gpu=self.threads_per_gpu,
                 max_staging_memory_gb=self.max_staging_memory_gb,

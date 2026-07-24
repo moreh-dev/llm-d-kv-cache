@@ -37,10 +37,8 @@ func TestNewTracedScorer(t *testing.T) {
 }
 
 func TestTracedScorerBehavior(t *testing.T) {
-	// Create a base scorer — explicitly clear ScoringStrategy to exercise
-	// auto-detect (Hybrid). Default config sets LongestPrefixMatch as moreh-dev safe baseline.
+	// Create a base scorer
 	config := kvcache.DefaultKVBlockScorerConfig()
-	config.ScoringStrategy = ""
 	baseScorer, err := kvcache.NewKVBlockScorer(config)
 	require.NoError(t, err)
 
@@ -71,7 +69,7 @@ func TestTracedScorerBehavior(t *testing.T) {
 		},
 	}
 
-	scores, err := tracedScorer.Score(context.Background(), keys, keyToPods, "test-model")
+	scores, err := tracedScorer.Score(context.Background(), keys, keyToPods, nil)
 	require.NoError(t, err)
 	require.NotNil(t, scores)
 
@@ -91,7 +89,7 @@ func TestTracedScorerWithEmptyData(t *testing.T) {
 		context.Background(),
 		[]kvblock.BlockHash{},
 		map[kvblock.BlockHash][]kvblock.PodEntry{},
-		"test-model",
+		nil,
 	)
 	require.NoError(t, err)
 	require.Empty(t, scores)
@@ -121,7 +119,7 @@ func TestTracedScorerScoreDistribution(t *testing.T) {
 		},
 	}
 
-	scores, err := tracedScorer.Score(context.Background(), keys, keyToPods, "test-model")
+	scores, err := tracedScorer.Score(context.Background(), keys, keyToPods, nil)
 	require.NoError(t, err)
 	require.Len(t, scores, 3)
 

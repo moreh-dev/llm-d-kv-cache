@@ -24,7 +24,6 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache"
 	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache/kvblock"
 	"github.com/llm-d/llm-d-kv-cache/pkg/utils/logging"
 )
@@ -52,9 +51,6 @@ type Config struct {
 	// PodDiscoveryConfig holds the configuration for pod discovery.
 	// Only used when DiscoverPods is true.
 	PodDiscoveryConfig *PodDiscoveryConfig `json:"podDiscoveryConfig,omitempty"`
-	// ModelConfigs defines model-specific settings (HMA, attention groups, etc.).
-	// Pool resolves HMA models from this at construction; nil means all models are simple.
-	ModelConfigs []*kvcache.ModelConfig `json:"modelConfigs,omitempty"`
 }
 
 // PodDiscoveryConfig holds configuration for the Kubernetes pod reconciler.
@@ -98,7 +94,7 @@ type Pool struct {
 	index          kvblock.Index
 	tokenProcessor kvblock.TokenProcessor
 	adapter        EngineAdapter
-	hmaModels      map[string]bool // resolved at construction from ModelConfigs
+	groupCatalog   *kvblock.GroupCatalog
 	wg             sync.WaitGroup
 }
 
@@ -118,7 +114,7 @@ func NewPool(cfg *Config, index kvblock.Index, tokenProcessor kvblock.TokenProce
 		index:          index,
 		tokenProcessor: tokenProcessor,
 		adapter:        adapter,
-		hmaModels:      kvcache.BuildHMAModels(cfg.ModelConfigs),
+		groupCatalog:   kvblock.NewGroupCatalog(),
 	}
 
 	for i := 0; i < p.concurrency; i++ {
@@ -126,6 +122,11 @@ func NewPool(cfg *Config, index kvblock.Index, tokenProcessor kvblock.TokenProce
 	}
 
 	return p
+}
+
+// GroupCatalog returns the KV cache group metadata learned from events.
+func (p *Pool) GroupCatalog() *kvblock.GroupCatalog {
+	return p.groupCatalog
 }
 
 // Start begins the worker pool.
@@ -225,7 +226,10 @@ func (p *Pool) processRawMessage(ctx context.Context, msg *RawMessage) {
 // slice of the correct length.
 func realignExtraFeatures(engineFeatures []*kvblock.BlockExtraFeatures, canonicalBlockCount int) []*kvblock.BlockExtraFeatures {
 	engineBlockCount := len(engineFeatures)
-	if engineBlockCount == canonicalBlockCount {
+	if canonicalBlockCount == 0 {
+		return nil
+	}
+	if engineBlockCount == 0 || engineBlockCount == canonicalBlockCount {
 		return engineFeatures
 	}
 
@@ -248,7 +252,8 @@ func realignExtraFeatures(engineFeatures []*kvblock.BlockExtraFeatures, canonica
 				canonical[canonicalIdx] = &kvblock.BlockExtraFeatures{}
 			}
 			canonical[canonicalIdx].MMHashes = append(
-				canonical[canonicalIdx].MMHashes, ef.MMHashes...)
+				canonical[canonicalIdx].MMHashes, ef.MMHashes...,
+			)
 		}
 	}
 
@@ -318,16 +323,18 @@ func (p *Pool) processEventBatch(ctx context.Context, batch *EventBatch, podIden
 				effectiveModelName = *ev.LoraName
 			}
 
-			var storedGroups uint32
-			if p.hmaModels[effectiveModelName] {
-				storedGroups = 1 << ev.GroupIdx
+			// Create PodEntry for this specific event's device tier.
+			podEntries := []kvblock.PodEntry{{PodIdentifier: podIdentifier, DeviceTier: deviceTier}}
+			if ev.GroupIdx != nil {
+				g := kvblock.GroupID(*ev.GroupIdx)
+				p.groupCatalog.Learn(podIdentifier, g, kvblock.GroupMetadata{
+					Kind:              string(ev.KVCacheSpecKind),
+					BlockSize:         ev.BlockSize,
+					SlidingWindowSize: ev.KVCacheSpecSlidingWindowSize,
+				})
+				podEntries[0].HasGroup = true
+				podEntries[0].GroupIdx = g
 			}
-
-			podEntries := []kvblock.PodEntry{{
-				PodIdentifier: podIdentifier,
-				DeviceTier:    deviceTier,
-				StoredGroups:  storedGroups,
-			}}
 
 			engineKeys := make([]kvblock.BlockHash, len(ev.BlockHashes))
 			for i, hash := range ev.BlockHashes {
@@ -362,7 +369,11 @@ func (p *Pool) processEventBatch(ctx context.Context, batch *EventBatch, podIden
 			// TokensToKVBlockKeys expects one entry per canonical block.
 			if extraFeatures != nil {
 				canonicalBlockCount := len(ev.Tokens) / p.tokenProcessor.BlockSize()
-				if len(extraFeatures) != canonicalBlockCount {
+				if canonicalBlockCount == 0 {
+					// Tokens don't fill a complete canonical block; no realignment needed
+					// since TokensToKVBlockKeys will produce zero keys anyway.
+					extraFeatures = nil
+				} else if len(extraFeatures) != canonicalBlockCount {
 					extraFeatures = realignExtraFeatures(extraFeatures, canonicalBlockCount)
 				}
 			}
@@ -394,7 +405,8 @@ func (p *Pool) processEventBatch(ctx context.Context, batch *EventBatch, podIden
 
 			// Compute request keys at canonical block size (= BlockSize)
 			requestKeys, err := p.tokenProcessor.TokensToKVBlockKeys(
-				parentRequestKey, ev.Tokens, effectiveModelName, extraFeatures)
+				parentRequestKey, ev.Tokens, effectiveModelName, extraFeatures,
+			)
 			if err != nil {
 				debugLogger.Error(err, "Failed to generate request keys",
 					"podIdentifier", podIdentifier, "effectiveModelName", effectiveModelName)
@@ -421,16 +433,12 @@ func (p *Pool) processEventBatch(ctx context.Context, batch *EventBatch, podIden
 				deviceTier = strings.ToLower(ev.DeviceTier)
 			}
 
-			var storedGroups uint32
-			if p.hmaModels[modelName] {
-				storedGroups = 1 << ev.GroupIdx
+			// Create PodEntry for this specific event's device tier.
+			podEntries := []kvblock.PodEntry{{PodIdentifier: podIdentifier, DeviceTier: deviceTier}}
+			if ev.GroupIdx != nil {
+				podEntries[0].HasGroup = true
+				podEntries[0].GroupIdx = kvblock.GroupID(*ev.GroupIdx)
 			}
-
-			podEntries := []kvblock.PodEntry{{
-				PodIdentifier: podIdentifier,
-				DeviceTier:    deviceTier,
-				StoredGroups:  storedGroups,
-			}}
 
 			// Iterate over the hashes and evict each key.
 			// The Index handles engine->request key resolution internally for both
@@ -449,6 +457,22 @@ func (p *Pool) processEventBatch(ctx context.Context, batch *EventBatch, podIden
 				"podIdentifier", podIdentifier,
 				"deviceTier", ev.DeviceTier,
 				"modelName", modelName)
+
+			// AllBlocksCleared is pod-wide: vLLM reset its entire prefix cache
+			// (e.g. after an RLHF weight update), so drop every entry for this pod
+			// across all tiers. vLLM and SGLang both emit it with no tier annotation.
+			// Index.Clear cannot scope by tier, so if an engine ever starts setting
+			// DeviceTier (a tier-scoped reset), this would over-wipe the other tiers.
+			// Surface that here so the regression does not pass silently.
+			if ev.DeviceTier != "" {
+				debugLogger.Info("AllBlocksCleared carried a device tier; clearing all tiers "+
+					"anyway (tier-scoped clear is not supported)",
+					"podIdentifier", podIdentifier, "deviceTier", ev.DeviceTier)
+			}
+			if err := p.index.Clear(ctx, podIdentifier); err != nil {
+				debugLogger.Error(err, "Failed to clear pod from index",
+					"podIdentifier", podIdentifier)
+			}
 
 		default:
 			debugLogger.Info("Unknown event", "podIdentifier", podIdentifier, "event", genericEvent)

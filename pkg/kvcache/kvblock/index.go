@@ -146,6 +146,12 @@ type Index interface {
 	Evict(ctx context.Context, key BlockHash, keyType KeyType, entries []PodEntry) error
 	// GetRequestKey returns the requestKey associated with the given engineKey.
 	GetRequestKey(ctx context.Context, engineKey BlockHash) (BlockHash, error)
+	// Clear removes all index entries for the given pod, across every device tier.
+	// It backs the AllBlocksCleared KV-event (a vLLM prefix-cache reset, e.g. after
+	// an RLHF weight update), which is pod-wide — vLLM emits it with no tier. Clear is
+	// O(N) over the index but runs off the Lookup/Add hot path, at a coarse cadence
+	// (typically once per weight sync).
+	Clear(ctx context.Context, podIdentifier string) error
 }
 
 // KeyType indicates whether a key passed to Evict is an engine key or a request key.
@@ -180,11 +186,10 @@ type PodEntry struct {
 	DeviceTier string
 	// Speculative indicates the entry was added predictively before a KV event confirmed it.
 	Speculative bool
-	// StoredGroups tracks the group IDs that have stored this block (for HMA models) as a bitmask.
-	// - 0: Simple (non-HMA) model - no group tracking, saves memory
-	// - non-zero: HMA model - bit N set if group N has cached this block
-	// Group N → bit N: set with |= (1 << N), clear with &^= (1 << N), check with & (1 << N) != 0
-	StoredGroups uint32
+	// HasGroup indicates GroupIdx identifies a vLLM KV cache group.
+	HasGroup bool
+	// GroupIdx identifies the vLLM KV cache group for HMA events.
+	GroupIdx GroupID
 }
 
 // String returns a string representation of the PodEntry.
@@ -192,6 +197,9 @@ func (e *PodEntry) String() string {
 	suffix := ""
 	if e.Speculative {
 		suffix = "[speculative]"
+	}
+	if e.HasGroup {
+		suffix += fmt.Sprintf("[group=%d]", e.GroupIdx)
 	}
 	return fmt.Sprintf("%s@%s%s", e.PodIdentifier, e.DeviceTier, suffix)
 }

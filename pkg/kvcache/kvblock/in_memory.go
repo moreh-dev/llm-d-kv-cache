@@ -92,8 +92,9 @@ var _ Index = &InMemoryIndex{}
 
 // PodCache represents a cache for pod entries.
 type PodCache struct {
-	// cache is an LRU cache keyed by "podID@tier[speculative]" string, value is *PodEntry.
-	cache *lru.Cache[string, *PodEntry]
+	// cache is an LRU cache that maps PodEntry to their last access time.
+	// thread-safe.
+	cache *lru.Cache[PodEntry, struct{}]
 	// mu protects the cache from concurrent access during check-and-set operations.
 	mu sync.Mutex
 }
@@ -129,14 +130,12 @@ func (m *InMemoryIndex) Lookup(ctx context.Context, requestKeys []BlockHash,
 
 			if podIdentifierSet.Len() == 0 {
 				// If no pod identifiers are provided, return all pods
-				for _, pod := range pods.cache.Values() {
-					podsPerKey[requestKey] = append(podsPerKey[requestKey], *pod)
-				}
+				podsPerKey[requestKey] = pods.cache.Keys()
 			} else {
 				// Filter pods based on the provided pod identifiers
-				for _, pod := range pods.cache.Values() {
+				for _, pod := range pods.cache.Keys() {
 					if podIdentifierSet.Has(pod.PodIdentifier) {
-						podsPerKey[requestKey] = append(podsPerKey[requestKey], *pod)
+						podsPerKey[requestKey] = append(podsPerKey[requestKey], pod)
 					}
 				}
 			}
@@ -195,7 +194,7 @@ func (m *InMemoryIndex) Add(ctx context.Context, engineKeys, requestKeys []Block
 		//nolint:nestif // double-checked locking pattern
 		if !found {
 			// Create new cache
-			cache, err := lru.New[string, *PodEntry](m.podCacheSize)
+			cache, err := lru.New[PodEntry, struct{}](m.podCacheSize)
 			if err != nil {
 				return fmt.Errorf("failed to create pod cache for key %s: %w", requestKey.String(), err)
 			}
@@ -222,15 +221,7 @@ func (m *InMemoryIndex) Add(ctx context.Context, engineKeys, requestKeys []Block
 
 		podCache.mu.Lock()
 		for _, entry := range entries {
-			key := entry.String()
-			if existing, ok := podCache.cache.Get(key); ok {
-				if entry.StoredGroups != 0 {
-					existing.StoredGroups |= entry.StoredGroups
-				}
-			} else {
-				ep := entry
-				podCache.cache.Add(key, &ep)
-			}
+			podCache.cache.Add(entry, struct{}{})
 		}
 		podCache.mu.Unlock()
 
@@ -294,14 +285,7 @@ func (m *InMemoryIndex) evictPodsFromRequestKey(requestKey, engineKey BlockHash,
 
 	podCache.mu.Lock()
 	for _, entry := range entries {
-		key := entry.String()
-		if existing, ok := podCache.cache.Get(key); ok {
-			if entry.StoredGroups == 0 || (existing.StoredGroups&^entry.StoredGroups) == 0 {
-				podCache.cache.Remove(key)
-			} else {
-				existing.StoredGroups &^= entry.StoredGroups
-			}
-		}
+		podCache.cache.Remove(entry)
 	}
 
 	isEmpty := podCache.cache.Len() == 0
@@ -326,6 +310,43 @@ func (m *InMemoryIndex) evictPodsFromRequestKey(requestKey, engineKey BlockHash,
 		traceLogger.Info("removed requestKey from index as no pods remain", "requestKey", requestKey)
 	}
 	currentCache.mu.Unlock()
+}
+
+// Clear removes every entry for the pod from the index, across all device tiers.
+// O(N) over the index, but Clear is rare and off the Lookup/Add hot path. Reuses
+// evictPodsFromRequestKey for race-safe removal, and holds no global lock — only
+// each PodCache's mu, briefly — so it does not stall Lookup.
+//
+// The engineKey->requestKey mapping (engineToRequestKeys) is intentionally left
+// untouched: it is LRU-bounded, self-heals when the pod re-Adds the same prefixes,
+// and any stale mapping resolves to an emptied request key that correctly breaks
+// the prefix chain in Lookup.
+func (m *InMemoryIndex) Clear(ctx context.Context, podIdentifier string) error {
+	traceLogger := log.FromContext(ctx).V(logging.TRACE).WithName("kvblock.InMemoryIndex.Clear")
+
+	for _, requestKey := range m.data.Keys() {
+		// Peek so a clear does not promote LRU recency on keys it scans.
+		podCache, found := m.data.Peek(requestKey)
+		if !found || podCache == nil {
+			continue
+		}
+
+		podCache.mu.Lock()
+		var matched []PodEntry
+		for _, entry := range podCache.cache.Keys() {
+			if entry.PodIdentifier == podIdentifier {
+				matched = append(matched, entry)
+			}
+		}
+		podCache.mu.Unlock()
+
+		if len(matched) > 0 {
+			m.evictPodsFromRequestKey(requestKey, EmptyBlockHash, matched, traceLogger)
+		}
+	}
+
+	traceLogger.Info("cleared pod from index", "pod", podIdentifier)
+	return nil
 }
 
 // GetRequestKey returns the last request key (highest index in the chain) associated with the given engineKey.
